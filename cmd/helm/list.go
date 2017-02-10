@@ -198,13 +198,14 @@ func (l *listCmd) statusCodes() []release.Status_Code {
 func formatList(rels []*release.Release) string {
 	table := uitable.New()
 	table.MaxColWidth = 60
-	table.AddRow("NAME", "REVISION", "UPDATED", "STATUS", "CHART")
+	table.AddRow("NAME", "REVISION", "UPDATED", "STATUS", "CHART", "RELEASED BY")
 	for _, r := range rels {
 		c := fmt.Sprintf("%s-%s", r.Chart.Metadata.Name, r.Chart.Metadata.Version)
 		t := timeconv.String(r.Info.LastDeployed)
 		s := r.Info.Status.Code.String()
 		v := r.Version
-		table.AddRow(r.Name, v, t, s, c)
+		u := r.Info.Username
+		table.AddRow(r.Name, v, t, s, c, u)
 	}
 	return table.String()
 }

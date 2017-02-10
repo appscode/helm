@@ -35,6 +35,7 @@ The status consists of:
 - last deployment time
 - k8s namespace in which the release lives
 - state of the release (can be: UNKNOWN, DEPLOYED, DELETED, SUPERSEDED, FAILED or DELETING)
+- name of the user who deployed the release
 - list of resources that this release consists of, sorted by kind
 - additional notes provided by the chart
 `
@@ -92,6 +93,7 @@ func PrintStatus(out io.Writer, res *services.GetReleaseStatusResponse) {
 	}
 	fmt.Fprintf(out, "NAMESPACE: %s\n", res.Namespace)
 	fmt.Fprintf(out, "STATUS: %s\n", res.Info.Status.Code)
+	fmt.Fprintf(out, "RELEASED BY: %s\n", res.Info.Username)
 	fmt.Fprintf(out, "\n")
 	if len(res.Info.Status.Resources) > 0 {
 		re := regexp.MustCompile("  +")
