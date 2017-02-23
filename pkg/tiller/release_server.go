@@ -27,6 +27,7 @@ import (
 
 	"github.com/technosophos/moniker"
 	ctx "golang.org/x/net/context"
+	"google.golang.org/grpc/metadata"
 	"k8s.io/helm/pkg/chartutil"
 	"k8s.io/helm/pkg/hooks"
 	"k8s.io/helm/pkg/kube"
@@ -41,7 +42,9 @@ import (
 	"k8s.io/helm/pkg/version"
 	"k8s.io/kubernetes/pkg/api/unversioned"
 	authenticationapi "k8s.io/kubernetes/pkg/apis/authentication"
+	authorizationapi "k8s.io/kubernetes/pkg/apis/authorization"
 	"k8s.io/kubernetes/pkg/client/clientset_generated/internalclientset"
+	rest "k8s.io/kubernetes/pkg/client/restclient"
 	"k8s.io/kubernetes/pkg/client/typed/discovery"
 )
 
@@ -637,6 +640,10 @@ func (s *ReleaseServer) InstallRelease(c ctx.Context, req *services.InstallRelea
 		return res, err
 	}
 
+	if err = s.checkForsubjectReview(c, rel, req); err != nil {
+		return &services.InstallReleaseResponse{}, err
+	}
+
 	res, err := s.performRelease(c, rel, req)
 	if err != nil {
 		log.Printf("Failed install perform step: %s", err)
@@ -1129,4 +1136,69 @@ func getUserName(c ctx.Context) string {
 		return ""
 	}
 	return userInfo.Username
+}
+
+func (s *ReleaseServer) checkForsubjectReview(c ctx.Context, r *release.Release, req *services.InstallReleaseRequest) error {
+	md, _ := metadata.FromContext(c)
+	authHeader, ok := md[string(helm.Authorization)]
+	if !ok {
+		// client cert
+	}
+	if strings.HasPrefix(authHeader[0], "Bearer ") {
+		return s.selfSubjectReviewForBearerAuth(c, r, req)
+	} else if strings.HasPrefix(authHeader[0], "Basic ") {
+		return selSubjectReviewForBasicAuth(c, r)
+	}
+	return errors.New("No authorization scheme found")
+}
+
+func (s *ReleaseServer) selfSubjectReviewForBearerAuth(c ctx.Context, r *release.Release, req *services.InstallReleaseRequest) error {
+	md, _ := metadata.FromContext(c)
+	token := md[string(helm.Authorization)][0][len("Bearer "):]
+	caCert, _ := getCertificateAuthority(md)
+	apiServer, _ := getServerURL(md)
+	tokenConfig := &rest.Config{
+		Host:        apiServer,
+		BearerToken: token,
+		TLSClientConfig: rest.TLSClientConfig{
+			CAData: caCert,
+		},
+	}
+	client, err := internalclientset.NewForConfig(tokenConfig)
+	if err != nil {
+		return err
+	}
+
+	h, err := s.env.Releases.History(req.Name)
+	if err != nil {
+		return err
+	}
+	currentRelease := &release.Release{}
+	if len(h) != 0 {
+		currentRelease = h[0]
+	}
+	targetRelease := r
+	current := bytes.NewBufferString(currentRelease.Manifest)
+	target := bytes.NewBufferString(targetRelease.Manifest)
+	sar := &authorizationapi.SelfSubjectAccessReview{
+		Spec: authorizationapi.SelfSubjectAccessReviewSpec{
+			ResourceAttributes: &authorizationapi.ResourceAttributes{
+				Namespace: r.Namespace,
+				Resource:  "Pod", // Get it from release
+			},
+		},
+	}
+
+	result, err := client.AuthorizationClient.SelfSubjectAccessReviews().Create(sar)
+	if err != nil {
+		return err
+	}
+	if !result.Status.Allowed {
+		return errors.New(fmt.Sprint("User %s dont have access", getUserName(c)))
+	}
+	return nil
+}
+
+func selSubjectReviewForBasicAuth(c ctx.Context, r *release.Release) error {
+	return nil
 }
