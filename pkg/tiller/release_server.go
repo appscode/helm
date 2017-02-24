@@ -21,11 +21,13 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"os"
 	"path"
 	"regexp"
 	"strings"
 
 	"encoding/base64"
+	"github.com/spf13/pflag"
 	"github.com/technosophos/moniker"
 	ctx "golang.org/x/net/context"
 	"google.golang.org/grpc/metadata"
@@ -46,9 +48,11 @@ import (
 	authenticationapi "k8s.io/kubernetes/pkg/apis/authentication"
 	authorizationapi "k8s.io/kubernetes/pkg/apis/authorization"
 	"k8s.io/kubernetes/pkg/client/clientset_generated/internalclientset"
-	rest "k8s.io/kubernetes/pkg/client/restclient"
 	"k8s.io/kubernetes/pkg/client/typed/discovery"
+	"k8s.io/kubernetes/pkg/client/unversioned/clientcmd"
+	clientcmdapi "k8s.io/kubernetes/pkg/client/unversioned/clientcmd/api"
 	"k8s.io/kubernetes/pkg/kubectl/resource"
+	utilflag "k8s.io/kubernetes/pkg/util/flag"
 )
 
 // releaseNameMaxLen is the maximum length of a release name.
@@ -100,6 +104,8 @@ func NewReleaseServer(env *environment.Environment, clientset internalclientset.
 		clientset: clientset,
 	}
 }
+
+var userKubeClient *kube.Client
 
 // ListReleases lists the releases found by the server.
 func (s *ReleaseServer) ListReleases(req *services.ListReleasesRequest, stream services.ReleaseService_ListReleasesServer) error {
@@ -295,7 +301,7 @@ func (s *ReleaseServer) UpdateRelease(c ctx.Context, req *services.UpdateRelease
 		return nil, err
 	}
 
-	if err = s.checkForsubjectReview(c, updatedRelease); err != nil {
+	if err = s.checkForUserSubjectReview(c, updatedRelease); err != nil {
 		return &services.UpdateReleaseResponse{}, err
 	}
 
@@ -458,7 +464,7 @@ func (s *ReleaseServer) RollbackRelease(c ctx.Context, req *services.RollbackRel
 		return nil, err
 	}
 
-	if err = s.checkForsubjectReview(c, targetRelease); err != nil {
+	if err = s.checkForUserSubjectReview(c, targetRelease); err != nil {
 		return &services.RollbackReleaseResponse{}, err
 	}
 
@@ -519,7 +525,7 @@ func (s *ReleaseServer) performRollback(c ctx.Context, currentRelease, targetRel
 }
 
 func (s *ReleaseServer) performKubeUpdate(currentRelease, targetRelease *release.Release, recreate bool, timeout int64, shouldWait bool) error {
-	kubeCli := s.env.KubeClient
+	kubeCli := userKubeClient//s.env.KubeClient
 	current := bytes.NewBufferString(currentRelease.Manifest)
 	target := bytes.NewBufferString(targetRelease.Manifest)
 	return kubeCli.Update(targetRelease.Namespace, current, target, recreate, timeout, shouldWait)
@@ -649,7 +655,7 @@ func (s *ReleaseServer) InstallRelease(c ctx.Context, req *services.InstallRelea
 		return res, err
 	}
 
-	if err = s.checkForsubjectReview(c, rel); err != nil {
+	if err = s.checkForUserSubjectReview(c, rel); err != nil {
 		return &services.InstallReleaseResponse{}, err
 	}
 
@@ -887,7 +893,8 @@ func (s *ReleaseServer) performRelease(c ctx.Context, r *release.Release, req *s
 		// nothing to replace, create as normal
 		// regular manifests
 		b := bytes.NewBufferString(r.Manifest)
-		if err := s.env.KubeClient.Create(r.Namespace, b, req.Timeout, req.Wait); err != nil {
+		if err := /*s.env.KubeClient*/
+		userKubeClient.Create(r.Namespace, b, req.Timeout, req.Wait); err != nil {
 			msg := fmt.Sprintf("Release %q failed: %s", r.Name, err)
 			log.Printf("warning: %s", msg)
 			r.Info.Status.Code = release.Status_FAILED
@@ -924,7 +931,7 @@ func (s *ReleaseServer) performRelease(c ctx.Context, r *release.Release, req *s
 }
 
 func (s *ReleaseServer) execHook(hs []*release.Hook, name, namespace, hook string, timeout int64) error {
-	kubeCli := s.env.KubeClient
+	kubeCli := userKubeClient//s.env.KubeClient
 	code, ok := events[hook]
 	if !ok {
 		return fmt.Errorf("unknown hook %q", hook)
@@ -993,7 +1000,7 @@ func (s *ReleaseServer) UninstallRelease(c ctx.Context, req *services.UninstallR
 	relutil.SortByRevision(rels)
 	rel := rels[len(rels)-1]
 
-	if err = s.checkForsubjectReview(c, &release.Release{Name: req.Name}); err != nil {
+	if err = s.checkForUserSubjectReview(c, &release.Release{Name: req.Name}); err != nil {
 		return &services.UninstallReleaseResponse{}, err
 	}
 
@@ -1151,7 +1158,7 @@ func getUserName(c ctx.Context) string {
 	return userInfo.Username
 }
 
-func (s *ReleaseServer) checkForsubjectReview(c ctx.Context, r *release.Release) error {
+func (s *ReleaseServer) checkForUserSubjectReview(c ctx.Context, r *release.Release) error {
 	md, _ := metadata.FromContext(c)
 	_, ok := md[string(helm.Authorization)]
 	if !ok {
@@ -1162,19 +1169,21 @@ func (s *ReleaseServer) checkForsubjectReview(c ctx.Context, r *release.Release)
 
 func (s *ReleaseServer) selfSubjectReviewForAuth(c ctx.Context, targetRelease *release.Release) error {
 	var reviewErrors []string
+	var err error
 	md, _ := metadata.FromContext(c)
 	caCert, _ := getCertificateAuthority(md)
 	apiServer, _ := getServerURL(md)
-	tokenConfig := &rest.Config{
-		Host: apiServer,
-		TLSClientConfig: rest.TLSClientConfig{
-			CAData: caCert,
+	overrides := &clientcmd.ConfigOverrides{
+		ClusterDefaults: clientcmd.ClusterDefaults,
+		ClusterInfo: clientcmdapi.Cluster{
+			Server: apiServer,
+			CertificateAuthorityData: caCert,
 		},
 	}
 	authHeader, _ := md[string(helm.Authorization)]
 	if strings.HasPrefix(authHeader[0], "Bearer ") {
 		token := authHeader[0][len("Bearer "):]
-		tokenConfig.BearerToken = token
+		overrides.AuthInfo.Token = token
 	} else if strings.HasPrefix(authHeader[0], "Basic ") {
 		basicAuth, err := base64.StdEncoding.DecodeString(authHeader[0][len("Basic "):])
 		if err != nil {
@@ -1184,14 +1193,12 @@ func (s *ReleaseServer) selfSubjectReviewForAuth(c ctx.Context, targetRelease *r
 		if len(username) == 0 || len(password) == 0 {
 			return errors.New("Missing username or password.")
 		}
-		tokenConfig.Username = username
-		tokenConfig.Password = password
+		overrides.AuthInfo.Username = username
+		overrides.AuthInfo.Password = password
 	}
 
-	userClient, err := internalclientset.NewForConfig(tokenConfig)
-	if err != nil {
-		return err
-	}
+	clientConfig := getClientConfig(overrides)
+	userKubeClient = kube.New(clientConfig)
 
 	h, err := s.env.Releases.History(targetRelease.Name)
 	if err != nil {
@@ -1229,7 +1236,11 @@ func (s *ReleaseServer) selfSubjectReviewForAuth(c ctx.Context, targetRelease *r
 				},
 			},
 		}
-		result, err := userClient.AuthorizationClient.SelfSubjectAccessReviews().Create(sr)
+		client, err := userKubeClient.ClientSet()
+		if err != nil {
+			return err
+		}
+		result, err := client.AuthorizationClient.SelfSubjectAccessReviews().Create(sr)
 		if err != nil {
 			return err
 		}
@@ -1283,4 +1294,23 @@ func (s *ReleaseServer) selfSubjectReviewForAuth(c ctx.Context, targetRelease *r
 		return fmt.Errorf(strings.Join(reviewErrors, " && "))
 	}
 	return nil
+}
+
+func getClientConfig(overrides *clientcmd.ConfigOverrides) clientcmd.ClientConfig {
+	flags := pflag.NewFlagSet("", pflag.ContinueOnError)
+	flags.SetNormalizeFunc(utilflag.WarnWordSepNormalizeFunc) // Warn for "_" flags
+	loadingRules := clientcmd.NewDefaultClientConfigLoadingRules()
+	// use the standard defaults for this client command
+	// DEPRECATED: remove and replace with something more accurate
+	loadingRules.DefaultClientConfig = &clientcmd.DefaultClientConfig
+
+	flags.StringVar(&loadingRules.ExplicitPath, "kubeconfig", "", "Path to the kubeconfig file to use for CLI requests.")
+
+	flagNames := clientcmd.RecommendedConfigOverrideFlags("")
+	// short flagnames are disabled by default.  These are here for compatibility with existing scripts
+	flagNames.ClusterOverrideFlags.APIServer.ShortName = "s"
+
+	clientcmd.BindOverrideFlags(overrides, flags, flagNames)
+	clientConfig := clientcmd.NewInteractiveDeferredLoadingClientConfig(loadingRules, overrides, os.Stdin)
+	return clientConfig
 }
