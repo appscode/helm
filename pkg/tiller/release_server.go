@@ -25,6 +25,7 @@ import (
 	"regexp"
 	"strings"
 
+	"encoding/base64"
 	"github.com/technosophos/moniker"
 	ctx "golang.org/x/net/context"
 	"google.golang.org/grpc/metadata"
@@ -41,12 +42,14 @@ import (
 	"k8s.io/helm/pkg/tiller/environment"
 	"k8s.io/helm/pkg/timeconv"
 	"k8s.io/helm/pkg/version"
+	kube_errors "k8s.io/kubernetes/pkg/api/errors"
 	"k8s.io/kubernetes/pkg/api/unversioned"
 	authenticationapi "k8s.io/kubernetes/pkg/apis/authentication"
 	authorizationapi "k8s.io/kubernetes/pkg/apis/authorization"
 	"k8s.io/kubernetes/pkg/client/clientset_generated/internalclientset"
 	rest "k8s.io/kubernetes/pkg/client/restclient"
 	"k8s.io/kubernetes/pkg/client/typed/discovery"
+	"k8s.io/kubernetes/pkg/kubectl/resource"
 )
 
 // releaseNameMaxLen is the maximum length of a release name.
@@ -293,6 +296,10 @@ func (s *ReleaseServer) UpdateRelease(c ctx.Context, req *services.UpdateRelease
 		return nil, err
 	}
 
+	if err = s.checkForsubjectReview(c, updatedRelease); err != nil {
+		return &services.UpdateReleaseResponse{}, err
+	}
+
 	res, err := s.performUpdate(c, currentRelease, updatedRelease, req)
 	if err != nil {
 		return res, err
@@ -303,7 +310,6 @@ func (s *ReleaseServer) UpdateRelease(c ctx.Context, req *services.UpdateRelease
 			return res, err
 		}
 	}
-
 	return res, nil
 }
 
@@ -453,6 +459,10 @@ func (s *ReleaseServer) RollbackRelease(c ctx.Context, req *services.RollbackRel
 		return nil, err
 	}
 
+	if err = s.checkForsubjectReview(c, targetRelease); err != nil {
+		return &services.RollbackReleaseResponse{}, err
+	}
+
 	res, err := s.performRollback(c, currentRelease, targetRelease, req)
 	if err != nil {
 		return res, err
@@ -463,7 +473,6 @@ func (s *ReleaseServer) RollbackRelease(c ctx.Context, req *services.RollbackRel
 			return res, err
 		}
 	}
-
 	return res, nil
 }
 
@@ -641,7 +650,7 @@ func (s *ReleaseServer) InstallRelease(c ctx.Context, req *services.InstallRelea
 		return res, err
 	}
 
-	if err = s.checkForsubjectReview(c, rel, req); err != nil {
+	if err = s.checkForsubjectReview(c, rel); err != nil {
 		return &services.InstallReleaseResponse{}, err
 	}
 
@@ -981,6 +990,10 @@ func (s *ReleaseServer) UninstallRelease(c ctx.Context, req *services.UninstallR
 	relutil.SortByRevision(rels)
 	rel := rels[len(rels)-1]
 
+	if err = s.checkForsubjectReview(c, &release.Release{Name: req.Name}); err != nil {
+		return &services.UninstallReleaseResponse{}, err
+	}
+
 	// TODO: Are there any cases where we want to force a delete even if it's
 	// already marked deleted?
 	if rel.Info.Status.Code == release.Status_DELETED {
@@ -1135,67 +1148,136 @@ func getUserName(c ctx.Context) string {
 	return userInfo.Username
 }
 
-func (s *ReleaseServer) checkForsubjectReview(c ctx.Context, r *release.Release, req *services.InstallReleaseRequest) error {
+func (s *ReleaseServer) checkForsubjectReview(c ctx.Context, r *release.Release) error {
 	md, _ := metadata.FromContext(c)
-	authHeader, ok := md[string(helm.Authorization)]
+	_, ok := md[string(helm.Authorization)]
 	if !ok {
-		// client cert
+		// client cert subjectreview
 	}
-	if strings.HasPrefix(authHeader[0], "Bearer ") {
-		return s.selfSubjectReviewForBearerAuth(c, r, req)
-	} else if strings.HasPrefix(authHeader[0], "Basic ") {
-		return selSubjectReviewForBasicAuth(c, r)
-	}
-	return errors.New("No authorization scheme found")
+	return s.selfSubjectReviewForAuth(c, r)
 }
 
-func (s *ReleaseServer) selfSubjectReviewForBearerAuth(c ctx.Context, r *release.Release, req *services.InstallReleaseRequest) error {
+func (s *ReleaseServer) selfSubjectReviewForAuth(c ctx.Context, targetRelease *release.Release) error {
+	var reviewErrors []string
 	md, _ := metadata.FromContext(c)
-	token := md[string(helm.Authorization)][0][len("Bearer "):]
 	caCert, _ := getCertificateAuthority(md)
 	apiServer, _ := getServerURL(md)
 	tokenConfig := &rest.Config{
-		Host:        apiServer,
-		BearerToken: token,
+		Host: apiServer,
 		TLSClientConfig: rest.TLSClientConfig{
 			CAData: caCert,
 		},
 	}
-	client, err := internalclientset.NewForConfig(tokenConfig)
+	authHeader, _ := md[string(helm.Authorization)]
+	if strings.HasPrefix(authHeader[0], "Bearer ") {
+		token := authHeader[0][len("Bearer "):]
+		tokenConfig.BearerToken = token
+	} else if strings.HasPrefix(authHeader[0], "Basic ") {
+		basicAuth, err := base64.StdEncoding.DecodeString(authHeader[0][len("Basic "):])
+		if err != nil {
+			return err
+		}
+		username, password := getUserPasswordFromBasicAuth(string(basicAuth))
+		if len(username) == 0 || len(password) == 0 {
+			return errors.New("Missing username or password.")
+		}
+		tokenConfig.Username = username
+		tokenConfig.Password = password
+	}
+
+	userClient, err := internalclientset.NewForConfig(tokenConfig)
 	if err != nil {
 		return err
 	}
 
-	h, err := s.env.Releases.History(req.Name)
+	h, err := s.env.Releases.History(targetRelease.Name)
 	if err != nil {
 		return err
 	}
+
 	currentRelease := &release.Release{}
 	if len(h) != 0 {
+		relutil.Reverse(h, relutil.SortByRevision)
 		currentRelease = h[0]
 	}
-	targetRelease := r
-	current := bytes.NewBufferString(currentRelease.Manifest)
-	target := bytes.NewBufferString(targetRelease.Manifest)
-	sar := &authorizationapi.SelfSubjectAccessReview{
-		Spec: authorizationapi.SelfSubjectAccessReviewSpec{
-			ResourceAttributes: &authorizationapi.ResourceAttributes{
-				Namespace: r.Namespace,
-				Resource:  "Pod", // Get it from release
-			},
-		},
-	}
 
-	result, err := client.AuthorizationClient.SelfSubjectAccessReviews().Create(sar)
+	currentBuffer := bytes.NewBufferString(currentRelease.Manifest)
+	targetBuffer := bytes.NewBufferString(targetRelease.Manifest)
+
+	original, err := s.env.KubeClient.BuildUnstructured(targetRelease.Namespace, currentBuffer)
 	if err != nil {
-		return err
+		return fmt.Errorf("failed decoding reader into objects: %s", err)
 	}
-	if !result.Status.Allowed {
-		return errors.New(fmt.Sprint("User %s dont have access", getUserName(c)))
-	}
-	return nil
-}
 
-func selSubjectReviewForBasicAuth(c ctx.Context, r *release.Release) error {
+	target, err := s.env.KubeClient.BuildUnstructured(targetRelease.Namespace, targetBuffer)
+	if err != nil {
+		return fmt.Errorf("failed decoding reader into objects: %s", err)
+	}
+
+	selfReview := func(resource, namespace, group, version, verb string) error {
+		sr := &authorizationapi.SelfSubjectAccessReview{
+			Spec: authorizationapi.SelfSubjectAccessReviewSpec{
+				ResourceAttributes: &authorizationapi.ResourceAttributes{
+					Namespace: targetRelease.Namespace,
+					Resource:  resource,
+					Verb:      verb,
+					Group:     group,
+					Version:   version,
+				},
+			},
+		}
+		result, err := userClient.AuthorizationClient.SelfSubjectAccessReviews().Create(sr)
+		if err != nil {
+			return err
+		}
+		if !result.Status.Allowed {
+			return errors.New(fmt.Sprint("User %s dont have access %s", getUserName(c), resource))
+		}
+		return nil
+	}
+
+	err = target.Visit(func(info *resource.Info, err error) error {
+		if err != nil {
+			return err
+		}
+
+		kind := info.Mapping.GroupVersionKind.Kind
+		group := info.Mapping.GroupVersionKind.Group
+		version := info.Mapping.GroupVersionKind.Version
+
+		helper := resource.NewHelper(info.Client, info.Mapping)
+		if _, err := helper.Get(info.Namespace, info.Name, info.Export); err != nil {
+			if !kube_errors.IsNotFound(err) {
+				return fmt.Errorf("Could not get information about the resource: err: %s", err)
+			}
+			// Since the resource does not exist, selfsubjectreview on create.
+			err := selfReview(kind, targetRelease.Namespace, group, version, "create")
+			reviewErrors = append(reviewErrors, err.Error())
+		}
+
+		originalInfo := original.Get(info)
+		if originalInfo == nil {
+			return fmt.Errorf("no resource with the name %s found", info.Name)
+		}
+
+		patch, _, err := kube.CreatePatch(info.Mapping, info.Object, originalInfo.Object)
+		if err != nil {
+			return fmt.Errorf("failed to create patch: %s", err)
+		}
+		if patch != nil {
+			err = selfReview(kind, targetRelease.Namespace, group, version, "update")
+			reviewErrors = append(reviewErrors, err.Error())
+		}
+		return nil
+	})
+	for _, info := range original.Difference(target) {
+		err = selfReview(info.Mapping.GroupVersionKind.Kind, info.Namespace, info.Mapping.GroupVersionKind.Version, info.Mapping.GroupVersionKind.Group, "delete")
+		if err != nil {
+			reviewErrors = append(reviewErrors, err.Error())
+		}
+	}
+	if len(reviewErrors) != 0 {
+		return fmt.Errorf(strings.Join(reviewErrors, " && "))
+	}
 	return nil
 }

@@ -355,7 +355,7 @@ func deleteResource(c *Client, info *resource.Info) error {
 	return reaper.Stop(info.Namespace, info.Name, 0, nil)
 }
 
-func createPatch(mapping *meta.RESTMapping, target, current runtime.Object) ([]byte, api.PatchType, error) {
+func CreatePatch(mapping *meta.RESTMapping, target, current runtime.Object) ([]byte, api.PatchType, error) {
 	oldData, err := json.Marshal(current)
 	if err != nil {
 		return nil, api.StrategicMergePatchType, fmt.Errorf("serializing current configuration: %s", err)
@@ -386,7 +386,7 @@ func createPatch(mapping *meta.RESTMapping, target, current runtime.Object) ([]b
 }
 
 func updateResource(c *Client, target *resource.Info, currentObj runtime.Object, recreate bool) error {
-	patch, patchType, err := createPatch(target.Mapping, target.Object, currentObj)
+	patch, patchType, err := CreatePatch(target.Mapping, target.Object, currentObj)
 	if err != nil {
 		return fmt.Errorf("failed to create patch: %s", err)
 	}
