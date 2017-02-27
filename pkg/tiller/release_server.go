@@ -22,7 +22,6 @@ import (
 	"errors"
 	"fmt"
 	"log"
-	"os"
 	"path"
 	"regexp"
 	"strings"
@@ -654,11 +653,9 @@ func (s *ReleaseServer) InstallRelease(c ctx.Context, req *services.InstallRelea
 		}
 		return res, err
 	}
-
 	if err = s.checkForUserSubjectReview(c, rel); err != nil {
 		return &services.InstallReleaseResponse{}, err
 	}
-
 	res, err := s.performRelease(c, rel, req)
 	if err != nil {
 		log.Printf("Failed install perform step: %s", err)
@@ -893,7 +890,7 @@ func (s *ReleaseServer) performRelease(c ctx.Context, r *release.Release, req *s
 		// nothing to replace, create as normal
 		// regular manifests
 		b := bytes.NewBufferString(r.Manifest)
-		if err := /*s.env.KubeClient*/ userKubeClient.Create(r.Namespace, b, req.Timeout, req.Wait); err != nil {
+		if err := userKubeClient.Create(r.Namespace, b, req.Timeout, req.Wait); err != nil {
 			msg := fmt.Sprintf("Release %q failed: %s", r.Name, err)
 			log.Printf("warning: %s", msg)
 			r.Info.Status.Code = release.Status_FAILED
@@ -930,7 +927,7 @@ func (s *ReleaseServer) performRelease(c ctx.Context, r *release.Release, req *s
 }
 
 func (s *ReleaseServer) execHook(hs []*release.Hook, name, namespace, hook string, timeout int64) error {
-	kubeCli := userKubeClient //s.env.KubeClient
+	kubeCli := userKubeClient
 	code, ok := events[hook]
 	if !ok {
 		return fmt.Errorf("unknown hook %q", hook)
@@ -1058,7 +1055,7 @@ func (s *ReleaseServer) UninstallRelease(c ctx.Context, req *services.UninstallR
 	es := []string{}
 	for _, file := range filesToDelete {
 		b := bytes.NewBufferString(file.content)
-		if err := /*s.env.KubeClient*/ userKubeClient.Delete(rel.Namespace, b); err != nil {
+		if err := userKubeClient.Delete(rel.Namespace, b); err != nil {
 			log.Printf("uninstall: Failed deletion of %q: %s", req.Name, err)
 			if err == kube.ErrNoObjectsVisited {
 				// Rewrite the message from "no objects visited"
@@ -1158,10 +1155,7 @@ func getUserName(c ctx.Context) string {
 }
 
 func (s *ReleaseServer) checkForUserSubjectReview(c ctx.Context, r *release.Release) error {
-	h, err := s.env.Releases.History(r.Name)
-	if err != nil {
-		return err
-	}
+	h, _ := s.env.Releases.History(r.Name)
 	currentRelease := &release.Release{}
 	if len(h) != 0 {
 		relutil.Reverse(h, relutil.SortByRevision)
@@ -1183,21 +1177,23 @@ func (s *ReleaseServer) selfSubjectReviewForAuth(c ctx.Context, targetRelease, c
 			CertificateAuthorityData: caCert,
 		},
 	}
-	authHeader, _ := md[string(helm.Authorization)]
-	if strings.HasPrefix(authHeader[0], "Bearer ") {
-		token := authHeader[0][len("Bearer "):]
-		overrides.AuthInfo.Token = token
-	} else if strings.HasPrefix(authHeader[0], "Basic ") {
-		basicAuth, err := base64.StdEncoding.DecodeString(authHeader[0][len("Basic "):])
-		if err != nil {
-			return err
+	authHeader, ok := md[string(helm.Authorization)]
+	if ok {
+		if strings.HasPrefix(authHeader[0], "Bearer ") {
+			token := authHeader[0][len("Bearer "):]
+			overrides.AuthInfo.Token = token
+		} else if strings.HasPrefix(authHeader[0], "Basic ") {
+			basicAuth, err := base64.StdEncoding.DecodeString(authHeader[0][len("Basic "):])
+			if err != nil {
+				return err
+			}
+			username, password := getUserPasswordFromBasicAuth(string(basicAuth))
+			if len(username) == 0 || len(password) == 0 {
+				return errors.New("Missing username or password.")
+			}
+			overrides.AuthInfo.Username = username
+			overrides.AuthInfo.Password = password
 		}
-		username, password := getUserPasswordFromBasicAuth(string(basicAuth))
-		if len(username) == 0 || len(password) == 0 {
-			return errors.New("Missing username or password.")
-		}
-		overrides.AuthInfo.Username = username
-		overrides.AuthInfo.Password = password
 	} else {
 		clientCert, err := getClientCert(md)
 		if err != nil {
@@ -1213,7 +1209,6 @@ func (s *ReleaseServer) selfSubjectReviewForAuth(c ctx.Context, targetRelease, c
 
 	clientConfig := getClientConfig(overrides)
 	userKubeClient = kube.New(clientConfig)
-
 	currentBuffer := bytes.NewBufferString(currentRelease.Manifest)
 	targetBuffer := bytes.NewBufferString(targetRelease.Manifest)
 
@@ -1227,27 +1222,26 @@ func (s *ReleaseServer) selfSubjectReviewForAuth(c ctx.Context, targetRelease, c
 		return fmt.Errorf("failed decoding reader into objects: %s", err)
 	}
 
-	selfReview := func(ssar *authorizationapi.SelfSubjectAccessReview) error {
+	selfReview := func(sar *authorizationapi.SelfSubjectAccessReview) error {
 		client, err := userKubeClient.ClientSet()
 		if err != nil {
 			return err
 		}
-		result, err := client.AuthorizationClient.SelfSubjectAccessReviews().Create(ssar)
+		result, err := client.AuthorizationClient.SelfSubjectAccessReviews().Create(sar)
 		if err != nil {
 			return err
 		}
 		if !result.Status.Allowed {
-			return errors.New(fmt.Sprint("User %s dont have access %s", getUserName(c), ssar.Spec.ResourceAttributes.Resource))
+			return errors.New(fmt.Sprint("User %s dont have access %s", getUserName(c), sar.Spec.ResourceAttributes.Resource))
 		}
 		return nil
 	}
-
 	err = target.Visit(func(info *resource.Info, err error) error {
 		if err != nil {
 			return err
 		}
 
-		ssar := &authorizationapi.SelfSubjectAccessReview{
+		sar := &authorizationapi.SelfSubjectAccessReview{
 			Spec: authorizationapi.SelfSubjectAccessReviewSpec{
 				ResourceAttributes: &authorizationapi.ResourceAttributes{
 					Resource: info.Mapping.GroupVersionKind.Kind,
@@ -1263,9 +1257,11 @@ func (s *ReleaseServer) selfSubjectReviewForAuth(c ctx.Context, targetRelease, c
 				return fmt.Errorf("Could not get information about the resource: err: %s", err)
 			}
 			// Since the resource does not exist, selfsubjectreview on create.
-			ssar.Spec.ResourceAttributes.Verb = "create"
-			err := selfReview(ssar)
-			reviewErrors = append(reviewErrors, err.Error())
+			sar.Spec.ResourceAttributes.Verb = "create"
+			err := selfReview(sar)
+			if err != nil {
+				reviewErrors = append(reviewErrors, err.Error())
+			}
 		}
 
 		originalInfo := original.Get(info)
@@ -1278,9 +1274,10 @@ func (s *ReleaseServer) selfSubjectReviewForAuth(c ctx.Context, targetRelease, c
 			return fmt.Errorf("failed to create patch: %s", err)
 		}
 		if patch != nil {
-			ssar.Spec.ResourceAttributes.Version = "update"
-			err = selfReview(ssar)
-			reviewErrors = append(reviewErrors, err.Error())
+			sar.Spec.ResourceAttributes.Version = "update"
+			if err = selfReview(sar); err != nil {
+				reviewErrors = append(reviewErrors, err.Error())
+			}
 		}
 		return nil
 	})
@@ -1319,8 +1316,7 @@ func getClientConfig(overrides *clientcmd.ConfigOverrides) clientcmd.ClientConfi
 	flagNames := clientcmd.RecommendedConfigOverrideFlags("")
 	// short flagnames are disabled by default.  These are here for compatibility with existing scripts
 	flagNames.ClusterOverrideFlags.APIServer.ShortName = "s"
-
 	clientcmd.BindOverrideFlags(overrides, flags, flagNames)
-	clientConfig := clientcmd.NewInteractiveDeferredLoadingClientConfig(loadingRules, overrides, os.Stdin)
+	clientConfig := clientcmd.NewNonInteractiveDeferredLoadingClientConfig(loadingRules, overrides)
 	return clientConfig
 }
