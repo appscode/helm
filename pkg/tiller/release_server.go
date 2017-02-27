@@ -18,6 +18,7 @@ package tiller
 
 import (
 	"bytes"
+	"encoding/base64"
 	"errors"
 	"fmt"
 	"log"
@@ -26,7 +27,6 @@ import (
 	"regexp"
 	"strings"
 
-	"encoding/base64"
 	"github.com/spf13/pflag"
 	"github.com/technosophos/moniker"
 	ctx "golang.org/x/net/context"
@@ -525,7 +525,7 @@ func (s *ReleaseServer) performRollback(c ctx.Context, currentRelease, targetRel
 }
 
 func (s *ReleaseServer) performKubeUpdate(currentRelease, targetRelease *release.Release, recreate bool, timeout int64, shouldWait bool) error {
-	kubeCli := userKubeClient//s.env.KubeClient
+	kubeCli := userKubeClient //s.env.KubeClient
 	current := bytes.NewBufferString(currentRelease.Manifest)
 	target := bytes.NewBufferString(targetRelease.Manifest)
 	return kubeCli.Update(targetRelease.Namespace, current, target, recreate, timeout, shouldWait)
@@ -893,8 +893,7 @@ func (s *ReleaseServer) performRelease(c ctx.Context, r *release.Release, req *s
 		// nothing to replace, create as normal
 		// regular manifests
 		b := bytes.NewBufferString(r.Manifest)
-		if err := /*s.env.KubeClient*/
-		userKubeClient.Create(r.Namespace, b, req.Timeout, req.Wait); err != nil {
+		if err := /*s.env.KubeClient*/ userKubeClient.Create(r.Namespace, b, req.Timeout, req.Wait); err != nil {
 			msg := fmt.Sprintf("Release %q failed: %s", r.Name, err)
 			log.Printf("warning: %s", msg)
 			r.Info.Status.Code = release.Status_FAILED
@@ -931,7 +930,7 @@ func (s *ReleaseServer) performRelease(c ctx.Context, r *release.Release, req *s
 }
 
 func (s *ReleaseServer) execHook(hs []*release.Hook, name, namespace, hook string, timeout int64) error {
-	kubeCli := userKubeClient//s.env.KubeClient
+	kubeCli := userKubeClient //s.env.KubeClient
 	code, ok := events[hook]
 	if !ok {
 		return fmt.Errorf("unknown hook %q", hook)
@@ -1059,7 +1058,7 @@ func (s *ReleaseServer) UninstallRelease(c ctx.Context, req *services.UninstallR
 	es := []string{}
 	for _, file := range filesToDelete {
 		b := bytes.NewBufferString(file.content)
-		if err := s.env.KubeClient.Delete(rel.Namespace, b); err != nil {
+		if err := /*s.env.KubeClient*/ userKubeClient.Delete(rel.Namespace, b); err != nil {
 			log.Printf("uninstall: Failed deletion of %q: %s", req.Name, err)
 			if err == kube.ErrNoObjectsVisited {
 				// Rewrite the message from "no objects visited"
@@ -1159,15 +1158,19 @@ func getUserName(c ctx.Context) string {
 }
 
 func (s *ReleaseServer) checkForUserSubjectReview(c ctx.Context, r *release.Release) error {
-	md, _ := metadata.FromContext(c)
-	_, ok := md[string(helm.Authorization)]
-	if !ok {
-		// client cert subjectreview
+	h, err := s.env.Releases.History(r.Name)
+	if err != nil {
+		return err
 	}
-	return s.selfSubjectReviewForAuth(c, r)
+	currentRelease := &release.Release{}
+	if len(h) != 0 {
+		relutil.Reverse(h, relutil.SortByRevision)
+		currentRelease = h[0]
+	}
+	return s.selfSubjectReviewForAuth(c, r, currentRelease)
 }
 
-func (s *ReleaseServer) selfSubjectReviewForAuth(c ctx.Context, targetRelease *release.Release) error {
+func (s *ReleaseServer) selfSubjectReviewForAuth(c ctx.Context, targetRelease, currentRelease *release.Release) error {
 	var reviewErrors []string
 	var err error
 	md, _ := metadata.FromContext(c)
@@ -1195,21 +1198,21 @@ func (s *ReleaseServer) selfSubjectReviewForAuth(c ctx.Context, targetRelease *r
 		}
 		overrides.AuthInfo.Username = username
 		overrides.AuthInfo.Password = password
+	} else {
+		clientCert, err := getClientCert(md)
+		if err != nil {
+			return err
+		}
+		clientKey, err := getClientKey(md)
+		if err != nil {
+			return err
+		}
+		overrides.AuthInfo.ClientCertificateData = clientCert
+		overrides.AuthInfo.ClientKeyData = clientKey
 	}
 
 	clientConfig := getClientConfig(overrides)
 	userKubeClient = kube.New(clientConfig)
-
-	h, err := s.env.Releases.History(targetRelease.Name)
-	if err != nil {
-		return err
-	}
-
-	currentRelease := &release.Release{}
-	if len(h) != 0 {
-		relutil.Reverse(h, relutil.SortByRevision)
-		currentRelease = h[0]
-	}
 
 	currentBuffer := bytes.NewBufferString(currentRelease.Manifest)
 	targetBuffer := bytes.NewBufferString(targetRelease.Manifest)
@@ -1224,28 +1227,17 @@ func (s *ReleaseServer) selfSubjectReviewForAuth(c ctx.Context, targetRelease *r
 		return fmt.Errorf("failed decoding reader into objects: %s", err)
 	}
 
-	selfReview := func(resource, namespace, group, version, verb string) error {
-		sr := &authorizationapi.SelfSubjectAccessReview{
-			Spec: authorizationapi.SelfSubjectAccessReviewSpec{
-				ResourceAttributes: &authorizationapi.ResourceAttributes{
-					Namespace: targetRelease.Namespace,
-					Resource:  resource,
-					Verb:      verb,
-					Group:     group,
-					Version:   version,
-				},
-			},
-		}
+	selfReview := func(ssar *authorizationapi.SelfSubjectAccessReview) error {
 		client, err := userKubeClient.ClientSet()
 		if err != nil {
 			return err
 		}
-		result, err := client.AuthorizationClient.SelfSubjectAccessReviews().Create(sr)
+		result, err := client.AuthorizationClient.SelfSubjectAccessReviews().Create(ssar)
 		if err != nil {
 			return err
 		}
 		if !result.Status.Allowed {
-			return errors.New(fmt.Sprint("User %s dont have access %s", getUserName(c), resource))
+			return errors.New(fmt.Sprint("User %s dont have access %s", getUserName(c), ssar.Spec.ResourceAttributes.Resource))
 		}
 		return nil
 	}
@@ -1255,9 +1247,15 @@ func (s *ReleaseServer) selfSubjectReviewForAuth(c ctx.Context, targetRelease *r
 			return err
 		}
 
-		kind := info.Mapping.GroupVersionKind.Kind
-		group := info.Mapping.GroupVersionKind.Group
-		version := info.Mapping.GroupVersionKind.Version
+		ssar := &authorizationapi.SelfSubjectAccessReview{
+			Spec: authorizationapi.SelfSubjectAccessReviewSpec{
+				ResourceAttributes: &authorizationapi.ResourceAttributes{
+					Resource: info.Mapping.GroupVersionKind.Kind,
+					Group:    info.Mapping.GroupVersionKind.Group,
+					Version:  info.Mapping.GroupVersionKind.Version,
+				},
+			},
+		}
 
 		helper := resource.NewHelper(info.Client, info.Mapping)
 		if _, err := helper.Get(info.Namespace, info.Name, info.Export); err != nil {
@@ -1265,7 +1263,8 @@ func (s *ReleaseServer) selfSubjectReviewForAuth(c ctx.Context, targetRelease *r
 				return fmt.Errorf("Could not get information about the resource: err: %s", err)
 			}
 			// Since the resource does not exist, selfsubjectreview on create.
-			err := selfReview(kind, targetRelease.Namespace, group, version, "create")
+			ssar.Spec.ResourceAttributes.Verb = "create"
+			err := selfReview(ssar)
 			reviewErrors = append(reviewErrors, err.Error())
 		}
 
@@ -1279,13 +1278,24 @@ func (s *ReleaseServer) selfSubjectReviewForAuth(c ctx.Context, targetRelease *r
 			return fmt.Errorf("failed to create patch: %s", err)
 		}
 		if patch != nil {
-			err = selfReview(kind, targetRelease.Namespace, group, version, "update")
+			ssar.Spec.ResourceAttributes.Version = "update"
+			err = selfReview(ssar)
 			reviewErrors = append(reviewErrors, err.Error())
 		}
 		return nil
 	})
 	for _, info := range original.Difference(target) {
-		err = selfReview(info.Mapping.GroupVersionKind.Kind, info.Namespace, info.Mapping.GroupVersionKind.Version, info.Mapping.GroupVersionKind.Group, "delete")
+		err = selfReview(&authorizationapi.SelfSubjectAccessReview{
+			Spec: authorizationapi.SelfSubjectAccessReviewSpec{
+				ResourceAttributes: &authorizationapi.ResourceAttributes{
+					Resource:  info.Mapping.GroupVersionKind.Kind,
+					Namespace: info.Namespace,
+					Version:   info.Mapping.GroupVersionKind.Version,
+					Group:     info.Mapping.GroupVersionKind.Group,
+					Verb:      "delete",
+				},
+			},
+		})
 		if err != nil {
 			reviewErrors = append(reviewErrors, err.Error())
 		}
