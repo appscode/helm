@@ -525,7 +525,7 @@ func (s *ReleaseServer) performRollback(c ctx.Context, currentRelease, targetRel
 }
 
 func (s *ReleaseServer) performKubeUpdate(currentRelease, targetRelease *release.Release, recreate bool, timeout int64, shouldWait bool) error {
-	kubeCli := userKubeClient //s.env.KubeClient
+	kubeCli := userKubeClient
 	current := bytes.NewBufferString(currentRelease.Manifest)
 	target := bytes.NewBufferString(targetRelease.Manifest)
 	return kubeCli.Update(targetRelease.Namespace, current, target, recreate, timeout, shouldWait)
@@ -1158,10 +1158,10 @@ func (s *ReleaseServer) checkForUserSubjectReview(c ctx.Context, r *release.Rele
 		relutil.Reverse(h, relutil.SortByRevision)
 		currentRelease = h[0]
 	}
-	return s.selfSubjectReviewForAuth(c, r, currentRelease)
+	return s.selfSubjectReview(c, r, currentRelease)
 }
 
-func (s *ReleaseServer) selfSubjectReviewForAuth(c ctx.Context, targetRelease, currentRelease *release.Release) error {
+func (s *ReleaseServer) selfSubjectReview(c ctx.Context, targetRelease, currentRelease *release.Release) error {
 	var reviewErrors []string
 	var err error
 	md, _ := metadata.FromContext(c)
@@ -1203,7 +1203,6 @@ func (s *ReleaseServer) selfSubjectReviewForAuth(c ctx.Context, targetRelease, c
 		overrides.AuthInfo.ClientCertificateData = clientCert
 		overrides.AuthInfo.ClientKeyData = clientKey
 	}
-
 	clientConfig := getClientConfig(overrides)
 	userKubeClient = kube.New(clientConfig)
 	currentBuffer := bytes.NewBufferString(currentRelease.Manifest)
@@ -1233,11 +1232,11 @@ func (s *ReleaseServer) selfSubjectReviewForAuth(c ctx.Context, targetRelease, c
 		}
 		return nil
 	}
+
 	err = target.Visit(func(info *resource.Info, err error) error {
 		if err != nil {
 			return err
 		}
-
 		sar := &authorizationapi.SelfSubjectAccessReview{
 			Spec: authorizationapi.SelfSubjectAccessReviewSpec{
 				ResourceAttributes: &authorizationapi.ResourceAttributes{
@@ -1247,7 +1246,6 @@ func (s *ReleaseServer) selfSubjectReviewForAuth(c ctx.Context, targetRelease, c
 				},
 			},
 		}
-
 		helper := resource.NewHelper(info.Client, info.Mapping)
 		if _, err := helper.Get(info.Namespace, info.Name, info.Export); err != nil {
 			if !kube_errors.IsNotFound(err) {
@@ -1260,12 +1258,10 @@ func (s *ReleaseServer) selfSubjectReviewForAuth(c ctx.Context, targetRelease, c
 				reviewErrors = append(reviewErrors, err.Error())
 			}
 		}
-
 		originalInfo := original.Get(info)
 		if originalInfo == nil {
 			return fmt.Errorf("no resource with the name %s found", info.Name)
 		}
-
 		patch, _, err := kube.CreatePatch(info.Mapping, info.Object, originalInfo.Object)
 		if err != nil {
 			return fmt.Errorf("failed to create patch: %s", err)
