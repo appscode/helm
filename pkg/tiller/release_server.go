@@ -43,7 +43,7 @@ import (
 	"k8s.io/helm/pkg/tiller/environment"
 	"k8s.io/helm/pkg/timeconv"
 	"k8s.io/helm/pkg/version"
-	kube_errors "k8s.io/kubernetes/pkg/api/errors"
+	kubeerrors "k8s.io/kubernetes/pkg/api/errors"
 	"k8s.io/kubernetes/pkg/api/unversioned"
 	authenticationapi "k8s.io/kubernetes/pkg/apis/authentication"
 	authorizationapi "k8s.io/kubernetes/pkg/apis/authorization"
@@ -104,8 +104,6 @@ func NewReleaseServer(env *environment.Environment, clientset internalclientset.
 		clientset: clientset,
 	}
 }
-
-var userKubeClient *kube.Client
 
 // ListReleases lists the releases found by the server.
 func (s *ReleaseServer) ListReleases(req *services.ListReleasesRequest, stream services.ReleaseService_ListReleasesServer) error {
@@ -300,12 +298,12 @@ func (s *ReleaseServer) UpdateRelease(c ctx.Context, req *services.UpdateRelease
 	if err != nil {
 		return nil, err
 	}
-
-	if err = s.checkForUserSubjectReview(c, updatedRelease); err != nil {
+	userKubeClient, err := s.checkForUserSubjectReview(c, updatedRelease)
+	if err != nil {
 		return &services.UpdateReleaseResponse{}, err
 	}
 
-	res, err := s.performUpdate(c, currentRelease, updatedRelease, req)
+	res, err := s.performUpdate(c, currentRelease, updatedRelease, req, userKubeClient)
 	if err != nil {
 		return res, err
 	}
@@ -318,7 +316,7 @@ func (s *ReleaseServer) UpdateRelease(c ctx.Context, req *services.UpdateRelease
 	return res, nil
 }
 
-func (s *ReleaseServer) performUpdate(c ctx.Context, originalRelease, updatedRelease *release.Release, req *services.UpdateReleaseRequest) (*services.UpdateReleaseResponse, error) {
+func (s *ReleaseServer) performUpdate(c ctx.Context, originalRelease, updatedRelease *release.Release, req *services.UpdateReleaseRequest, userKubeClient *kube.Client) (*services.UpdateReleaseResponse, error) {
 	res := &services.UpdateReleaseResponse{Release: updatedRelease}
 
 	updatedRelease.Info.Username = getUserName(c)
@@ -330,12 +328,12 @@ func (s *ReleaseServer) performUpdate(c ctx.Context, originalRelease, updatedRel
 
 	// pre-upgrade hooks
 	if !req.DisableHooks {
-		if err := s.execHook(updatedRelease.Hooks, updatedRelease.Name, updatedRelease.Namespace, hooks.PreUpgrade, req.Timeout); err != nil {
+		if err := s.execHook(updatedRelease.Hooks, updatedRelease.Name, updatedRelease.Namespace, hooks.PreUpgrade, req.Timeout, userKubeClient); err != nil {
 			return res, err
 		}
 	}
 
-	if err := s.performKubeUpdate(originalRelease, updatedRelease, req.Recreate, req.Timeout, req.Wait); err != nil {
+	if err := s.performKubeUpdate(originalRelease, updatedRelease, req.Recreate, req.Timeout, req.Wait, userKubeClient); err != nil {
 		msg := fmt.Sprintf("Upgrade %q failed: %s", updatedRelease.Name, err)
 		log.Printf("warning: %s", msg)
 		originalRelease.Info.Status.Code = release.Status_SUPERSEDED
@@ -348,7 +346,7 @@ func (s *ReleaseServer) performUpdate(c ctx.Context, originalRelease, updatedRel
 
 	// post-upgrade hooks
 	if !req.DisableHooks {
-		if err := s.execHook(updatedRelease.Hooks, updatedRelease.Name, updatedRelease.Namespace, hooks.PostUpgrade, req.Timeout); err != nil {
+		if err := s.execHook(updatedRelease.Hooks, updatedRelease.Name, updatedRelease.Namespace, hooks.PostUpgrade, req.Timeout, userKubeClient); err != nil {
 			return res, err
 		}
 	}
@@ -464,11 +462,12 @@ func (s *ReleaseServer) RollbackRelease(c ctx.Context, req *services.RollbackRel
 		return nil, err
 	}
 
-	if err = s.checkForUserSubjectReview(c, targetRelease); err != nil {
+	userKubeClient, err := s.checkForUserSubjectReview(c, targetRelease)
+	if err != nil {
 		return &services.RollbackReleaseResponse{}, err
 	}
 
-	res, err := s.performRollback(c, currentRelease, targetRelease, req)
+	res, err := s.performRollback(c, currentRelease, targetRelease, req, userKubeClient)
 	if err != nil {
 		return res, err
 	}
@@ -481,7 +480,7 @@ func (s *ReleaseServer) RollbackRelease(c ctx.Context, req *services.RollbackRel
 	return res, nil
 }
 
-func (s *ReleaseServer) performRollback(c ctx.Context, currentRelease, targetRelease *release.Release, req *services.RollbackReleaseRequest) (*services.RollbackReleaseResponse, error) {
+func (s *ReleaseServer) performRollback(c ctx.Context, currentRelease, targetRelease *release.Release, req *services.RollbackReleaseRequest, userKubeClient *kube.Client) (*services.RollbackReleaseResponse, error) {
 	res := &services.RollbackReleaseResponse{Release: targetRelease}
 
 	targetRelease.Info.Username = getUserName(c)
@@ -493,12 +492,12 @@ func (s *ReleaseServer) performRollback(c ctx.Context, currentRelease, targetRel
 
 	// pre-rollback hooks
 	if !req.DisableHooks {
-		if err := s.execHook(targetRelease.Hooks, targetRelease.Name, targetRelease.Namespace, hooks.PreRollback, req.Timeout); err != nil {
+		if err := s.execHook(targetRelease.Hooks, targetRelease.Name, targetRelease.Namespace, hooks.PreRollback, req.Timeout, userKubeClient); err != nil {
 			return res, err
 		}
 	}
 
-	if err := s.performKubeUpdate(currentRelease, targetRelease, req.Recreate, req.Timeout, req.Wait); err != nil {
+	if err := s.performKubeUpdate(currentRelease, targetRelease, req.Recreate, req.Timeout, req.Wait, userKubeClient); err != nil {
 		msg := fmt.Sprintf("Rollback %q failed: %s", targetRelease.Name, err)
 		log.Printf("warning: %s", msg)
 		currentRelease.Info.Status.Code = release.Status_SUPERSEDED
@@ -511,7 +510,7 @@ func (s *ReleaseServer) performRollback(c ctx.Context, currentRelease, targetRel
 
 	// post-rollback hooks
 	if !req.DisableHooks {
-		if err := s.execHook(targetRelease.Hooks, targetRelease.Name, targetRelease.Namespace, hooks.PostRollback, req.Timeout); err != nil {
+		if err := s.execHook(targetRelease.Hooks, targetRelease.Name, targetRelease.Namespace, hooks.PostRollback, req.Timeout, userKubeClient); err != nil {
 			return res, err
 		}
 	}
@@ -524,7 +523,7 @@ func (s *ReleaseServer) performRollback(c ctx.Context, currentRelease, targetRel
 	return res, nil
 }
 
-func (s *ReleaseServer) performKubeUpdate(currentRelease, targetRelease *release.Release, recreate bool, timeout int64, shouldWait bool) error {
+func (s *ReleaseServer) performKubeUpdate(currentRelease, targetRelease *release.Release, recreate bool, timeout int64, shouldWait bool, userKubeClient *kube.Client) error {
 	kubeCli := userKubeClient
 	current := bytes.NewBufferString(currentRelease.Manifest)
 	target := bytes.NewBufferString(targetRelease.Manifest)
@@ -654,10 +653,11 @@ func (s *ReleaseServer) InstallRelease(c ctx.Context, req *services.InstallRelea
 		}
 		return res, err
 	}
-	if err = s.checkForUserSubjectReview(c, rel); err != nil {
+	userKubeClient, err := s.checkForUserSubjectReview(c, rel)
+	if err != nil {
 		return &services.InstallReleaseResponse{}, err
 	}
-	res, err := s.performRelease(c, rel, req)
+	res, err := s.performRelease(c, rel, req, userKubeClient)
 	if err != nil {
 		log.Printf("Failed install perform step: %s", err)
 	}
@@ -842,7 +842,7 @@ func (s *ReleaseServer) recordRelease(r *release.Release, reuse bool) {
 }
 
 // performRelease runs a release.
-func (s *ReleaseServer) performRelease(c ctx.Context, r *release.Release, req *services.InstallReleaseRequest) (*services.InstallReleaseResponse, error) {
+func (s *ReleaseServer) performRelease(c ctx.Context, r *release.Release, req *services.InstallReleaseRequest, userKubeClient *kube.Client) (*services.InstallReleaseResponse, error) {
 	res := &services.InstallReleaseResponse{Release: r}
 
 	r.Info.Username = getUserName(c)
@@ -854,7 +854,7 @@ func (s *ReleaseServer) performRelease(c ctx.Context, r *release.Release, req *s
 
 	// pre-install hooks
 	if !req.DisableHooks {
-		if err := s.execHook(r.Hooks, r.Name, r.Namespace, hooks.PreInstall, req.Timeout); err != nil {
+		if err := s.execHook(r.Hooks, r.Name, r.Namespace, hooks.PreInstall, req.Timeout, userKubeClient); err != nil {
 			return res, err
 		}
 	}
@@ -876,7 +876,7 @@ func (s *ReleaseServer) performRelease(c ctx.Context, r *release.Release, req *s
 		// so as to append to the old release's history
 		r.Version = old.Version + 1
 
-		if err := s.performKubeUpdate(old, r, false, req.Timeout, req.Wait); err != nil {
+		if err := s.performKubeUpdate(old, r, false, req.Timeout, req.Wait, userKubeClient); err != nil {
 			msg := fmt.Sprintf("Release replace %q failed: %s", r.Name, err)
 			log.Printf("warning: %s", msg)
 			old.Info.Status.Code = release.Status_SUPERSEDED
@@ -903,7 +903,7 @@ func (s *ReleaseServer) performRelease(c ctx.Context, r *release.Release, req *s
 
 	// post-install hooks
 	if !req.DisableHooks {
-		if err := s.execHook(r.Hooks, r.Name, r.Namespace, hooks.PostInstall, req.Timeout); err != nil {
+		if err := s.execHook(r.Hooks, r.Name, r.Namespace, hooks.PostInstall, req.Timeout, userKubeClient); err != nil {
 			msg := fmt.Sprintf("Release %q failed post-install: %s", r.Name, err)
 			log.Printf("warning: %s", msg)
 			r.Info.Status.Code = release.Status_FAILED
@@ -927,7 +927,7 @@ func (s *ReleaseServer) performRelease(c ctx.Context, r *release.Release, req *s
 	return res, nil
 }
 
-func (s *ReleaseServer) execHook(hs []*release.Hook, name, namespace, hook string, timeout int64) error {
+func (s *ReleaseServer) execHook(hs []*release.Hook, name, namespace, hook string, timeout int64, userKubeClient *kube.Client) error {
 	kubeCli := userKubeClient
 	code, ok := events[hook]
 	if !ok {
@@ -993,7 +993,8 @@ func (s *ReleaseServer) UninstallRelease(c ctx.Context, req *services.UninstallR
 	relutil.SortByRevision(rels)
 	rel := rels[len(rels)-1]
 
-	if err = s.checkForUserSubjectReview(c, &release.Release{Name: req.Name}); err != nil {
+	userKubeClient, err := s.checkForUserSubjectReview(c, &release.Release{Name: req.Name})
+	if err != nil {
 		return &services.UninstallReleaseResponse{}, err
 	}
 
@@ -1017,7 +1018,7 @@ func (s *ReleaseServer) UninstallRelease(c ctx.Context, req *services.UninstallR
 	res := &services.UninstallReleaseResponse{Release: rel}
 
 	if !req.DisableHooks {
-		if err := s.execHook(rel.Hooks, rel.Name, rel.Namespace, hooks.PreDelete, req.Timeout); err != nil {
+		if err := s.execHook(rel.Hooks, rel.Name, rel.Namespace, hooks.PreDelete, req.Timeout, userKubeClient); err != nil {
 			return res, err
 		}
 	}
@@ -1063,7 +1064,7 @@ func (s *ReleaseServer) UninstallRelease(c ctx.Context, req *services.UninstallR
 	}
 
 	if !req.DisableHooks {
-		if err := s.execHook(rel.Hooks, rel.Name, rel.Namespace, hooks.PostDelete, req.Timeout); err != nil {
+		if err := s.execHook(rel.Hooks, rel.Name, rel.Namespace, hooks.PostDelete, req.Timeout, userKubeClient); err != nil {
 			es = append(es, err.Error())
 		}
 	}
@@ -1151,8 +1152,11 @@ func getUserName(c ctx.Context) string {
 	return userInfo.Username
 }
 
-func (s *ReleaseServer) checkForUserSubjectReview(c ctx.Context, r *release.Release) error {
-	h, _ := s.env.Releases.History(r.Name)
+func (s *ReleaseServer) checkForUserSubjectReview(c ctx.Context, r *release.Release) (*kube.Client, error) {
+	h, err := s.env.Releases.History(r.Name)
+	if err != driver.ErrReleaseNotFound && err != nil {
+		return nil, err
+	}
 	currentRelease := &release.Release{}
 	if len(h) != 0 {
 		relutil.Reverse(h, relutil.SortByRevision)
@@ -1161,7 +1165,7 @@ func (s *ReleaseServer) checkForUserSubjectReview(c ctx.Context, r *release.Rele
 	return s.selfSubjectReview(c, r, currentRelease)
 }
 
-func (s *ReleaseServer) selfSubjectReview(c ctx.Context, targetRelease, currentRelease *release.Release) error {
+func (s *ReleaseServer) selfSubjectReview(c ctx.Context, targetRelease, currentRelease *release.Release) (*kube.Client, error) {
 	var reviewErrors []string
 	var err error
 	md, _ := metadata.FromContext(c)
@@ -1182,11 +1186,11 @@ func (s *ReleaseServer) selfSubjectReview(c ctx.Context, targetRelease, currentR
 		} else if strings.HasPrefix(authHeader[0], "Basic ") {
 			basicAuth, err := base64.StdEncoding.DecodeString(authHeader[0][len("Basic "):])
 			if err != nil {
-				return err
+				return nil, err
 			}
 			username, password := getUserPasswordFromBasicAuth(string(basicAuth))
 			if len(username) == 0 || len(password) == 0 {
-				return errors.New("Missing username or password.")
+				return nil, errors.New("Missing username or password.")
 			}
 			overrides.AuthInfo.Username = username
 			overrides.AuthInfo.Password = password
@@ -1194,28 +1198,28 @@ func (s *ReleaseServer) selfSubjectReview(c ctx.Context, targetRelease, currentR
 	} else {
 		clientCert, err := getClientCert(md)
 		if err != nil {
-			return err
+			return nil, err
 		}
 		clientKey, err := getClientKey(md)
 		if err != nil {
-			return err
+			return nil, err
 		}
 		overrides.AuthInfo.ClientCertificateData = clientCert
 		overrides.AuthInfo.ClientKeyData = clientKey
 	}
 	clientConfig := getClientConfig(overrides)
-	userKubeClient = kube.New(clientConfig)
+	userKubeClient := kube.New(clientConfig)
 	currentBuffer := bytes.NewBufferString(currentRelease.Manifest)
 	targetBuffer := bytes.NewBufferString(targetRelease.Manifest)
 
 	original, err := s.env.KubeClient.BuildUnstructured(targetRelease.Namespace, currentBuffer)
 	if err != nil {
-		return fmt.Errorf("failed decoding reader into objects: %s", err)
+		return userKubeClient, fmt.Errorf("failed decoding reader into objects: %s", err)
 	}
 
 	target, err := s.env.KubeClient.BuildUnstructured(targetRelease.Namespace, targetBuffer)
 	if err != nil {
-		return fmt.Errorf("failed decoding reader into objects: %s", err)
+		return userKubeClient, fmt.Errorf("failed decoding reader into objects: %s", err)
 	}
 
 	selfReview := func(sar *authorizationapi.SelfSubjectAccessReview) error {
@@ -1248,7 +1252,7 @@ func (s *ReleaseServer) selfSubjectReview(c ctx.Context, targetRelease, currentR
 		}
 		helper := resource.NewHelper(info.Client, info.Mapping)
 		if _, err := helper.Get(info.Namespace, info.Name, info.Export); err != nil {
-			if !kube_errors.IsNotFound(err) {
+			if !kubeerrors.IsNotFound(err) {
 				return fmt.Errorf("Could not get information about the resource: err: %s", err)
 			}
 			// Since the resource does not exist, selfsubjectreview on create.
@@ -1291,9 +1295,9 @@ func (s *ReleaseServer) selfSubjectReview(c ctx.Context, targetRelease, currentR
 		}
 	}
 	if len(reviewErrors) != 0 {
-		return fmt.Errorf(strings.Join(reviewErrors, " && "))
+		return userKubeClient, fmt.Errorf(strings.Join(reviewErrors, " && "))
 	}
-	return nil
+	return userKubeClient, nil
 }
 
 func getClientConfig(overrides *clientcmd.ConfigOverrides) clientcmd.ClientConfig {
