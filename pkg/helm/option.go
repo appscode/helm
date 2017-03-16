@@ -419,14 +419,10 @@ func WithMaxHistory(max int32) HistoryOption {
 	}
 }
 
-// NewContext creates a versioned context with kubernetes client data.
+// NewContext creates a versioned context.
 func NewContext() context.Context {
-	return metadata.NewContext(
-		context.TODO(),
-		metadata.New(map[string]string{
-			"x-helm-api-client": version.Version,
-		}),
-	)
+	md := metadata.Pairs("x-helm-api-client", version.Version)
+	return metadata.NewContext(context.TODO(), md)
 }
 
 // ReleaseTestOption allows configuring optional request data for
