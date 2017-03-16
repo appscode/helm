@@ -20,9 +20,8 @@ package kube
 type AuthHeader string
 
 const (
-	Authorization       AuthHeader = "authorization"
+	Authorization AuthHeader = "authorization"
 
-	// Generated from input keys above
-	UserInfo            AuthHeader = "k8s-user-info"
-	UserClientConfig    AuthHeader = "k8s-user-client-config"
+	UserInfo         AuthHeader = "k8s-user-info"
+	UserClientConfig AuthHeader = "k8s-user-client-config"
 )
