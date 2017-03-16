@@ -28,7 +28,6 @@ import (
 	"github.com/technosophos/moniker"
 	ctx "golang.org/x/net/context"
 	"k8s.io/helm/pkg/chartutil"
-	"k8s.io/helm/pkg/helm"
 	"k8s.io/helm/pkg/hooks"
 	"k8s.io/helm/pkg/kube"
 	"k8s.io/helm/pkg/proto/hapi/chart"
@@ -1121,7 +1120,7 @@ func (s *ReleaseServer) RunReleaseTest(req *services.TestReleaseRequest, stream 
 }
 
 func getUserName(c ctx.Context) string {
-	user := c.Value(helm.K8sUser)
+	user := c.Value(kube.UserInfo)
 	if user == nil {
 		return ""
 	}

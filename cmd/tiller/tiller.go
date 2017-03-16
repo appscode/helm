@@ -41,11 +41,6 @@ const (
 	storageConfigMap = "configmap"
 )
 
-// rootServer is the root gRPC server.
-//
-// Each gRPC service registers itself to this server during init().
-var rootServer = tiller.NewServer()
-
 // env is the default environment.
 //
 // Any changes to env should be done before rootServer.Serve() is called.
@@ -90,7 +85,13 @@ func main() {
 }
 
 func start(c *cobra.Command, args []string) {
-	clientset, err := kube.New(nil).ClientSet()
+	client := kube.New(nil)
+	clientset, err := client.ClientSet()
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Cannot initialize Kubernetes connection: %s\n", err)
+		os.Exit(1)
+	}
+	syscfg, err := client.ClientConfig()
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Cannot initialize Kubernetes connection: %s\n", err)
 		os.Exit(1)
@@ -122,6 +123,7 @@ func start(c *cobra.Command, args []string) {
 	probeErrCh := make(chan error)
 	go func() {
 		svc := tiller.NewReleaseServer(env, clientset)
+		rootServer := tiller.NewServer(syscfg)
 		services.RegisterReleaseServiceServer(rootServer, svc)
 		if err := rootServer.Serve(lstn); err != nil {
 			srvErrCh <- err
