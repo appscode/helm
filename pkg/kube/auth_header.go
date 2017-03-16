@@ -14,19 +14,15 @@ See the License for the specific language governing permissions and
 limitations under the License.
 */
 
-package helm
+package kube
 
 //AuthHeader is key type for context
 type AuthHeader string
 
 const (
-	Authorization           AuthHeader = "authorization"
-	K8sServer               AuthHeader = "k8s-server"
-	K8sClientCertificate    AuthHeader = "k8s-client-certificate"
-	K8sCertificateAuthority AuthHeader = "k8s-certificate-authority"
-	K8sClientKey            AuthHeader = "k8s-client-key"
+	Authorization       AuthHeader = "authorization"
 
 	// Generated from input keys above
-	K8sUser   AuthHeader = "k8s-user"
-	K8sConfig AuthHeader = "k8s-client-config"
+	UserInfo            AuthHeader = "k8s-user-info"
+	UserClientConfig    AuthHeader = "k8s-user-client-config"
 )

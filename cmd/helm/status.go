@@ -68,7 +68,7 @@ func newStatusCmd(client helm.Interface, out io.Writer) *cobra.Command {
 			}
 			status.release = args[0]
 			if status.client == nil {
-				status.client = helm.NewClient(helm.Host(tillerHost))
+				status.client = helm.NewClient(helm.Host(tillerHost), helm.WithContext(loadAuthHeaders))
 			}
 			return status.run()
 		},

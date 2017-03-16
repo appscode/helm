@@ -24,14 +24,12 @@ import (
 	"log"
 
 	"github.com/golang/protobuf/proto"
-	"github.com/spf13/pflag"
 	"golang.org/x/net/context"
 	"google.golang.org/grpc/metadata"
 	cpb "k8s.io/helm/pkg/proto/hapi/chart"
 	"k8s.io/helm/pkg/proto/hapi/release"
 	rls "k8s.io/helm/pkg/proto/hapi/services"
 	"k8s.io/helm/pkg/version"
-	cmdutil "k8s.io/kubernetes/pkg/kubectl/cmd/util"
 )
 
 // Option allows specifying various settings configurable by
@@ -71,6 +69,8 @@ type options struct {
 	contentReq rls.GetReleaseContentRequest
 	// release rollback options are applied directly to the rollback release request
 	rollbackReq rls.RollbackReleaseRequest
+	// withContext adds metadata to context before sending
+	withContext func(context.Context) context.Context
 	// before intercepts client calls before sending
 	before func(context.Context, proto.Message) error
 	// release history options are applied directly to the get release history request
@@ -95,6 +95,14 @@ func WithTLS(cfg *tls.Config) Option {
 	return func(opts *options) {
 		opts.useTLS = true
 		opts.tlsConfig = cfg
+}
+
+// WithContext returns an option that allows adding metadata to context of a helm client rpc
+// before being sent OTA to tiller. The intercepting function should return
+// an error to indicate that the call should not proceed or nil otherwise.
+func WithContext(fn func(context.Context) context.Context) Option {
+	return func(opts *options) {
+		opts.withContext = fn
 	}
 }
 
@@ -415,90 +423,10 @@ func WithMaxHistory(max int32) HistoryOption {
 func NewContext() context.Context {
 	return metadata.NewContext(
 		context.TODO(),
-		metadata.Join(
-			metadata.New(
-				extractKubeConfig()),
-			metadata.New(map[string]string{
-				"x-helm-api-client": version.Version,
-			}),
-		),
+		metadata.New(map[string]string{
+			"x-helm-api-client": version.Version,
+		}),
 	)
-}
-
-func extractKubeConfig() map[string]string {
-	configData := make(map[string]string)
-	clientConfig := cmdutil.DefaultClientConfig(pflag.NewFlagSet("", pflag.ContinueOnError))
-	c, err := clientConfig.ClientConfig()
-	if err != nil {
-		log.Println("Failed to extract kubeconfig")
-		return configData
-	}
-
-	// Kube APIServer URL
-	if len(c.Host) != 0 {
-		configData[string(K8sServer)] = c.Host
-	}
-
-	if c.AuthProvider != nil {
-		switch c.AuthProvider.Name {
-		case "gcp":
-			configData[string(Authorization)] = "Bearer " + c.AuthProvider.Config["access_token"]
-		case "oidc":
-			configData[string(Authorization)] = "Bearer " + c.AuthProvider.Config["id-token"]
-		default:
-			panic("Unknown auth provider: " + c.AuthProvider.Name)
-		}
-	}
-
-	if len(c.BearerToken) != 0 {
-		configData[string(Authorization)] = "Bearer " + c.BearerToken
-	}
-
-	if len(c.Username) != 0 && len(c.Password) != 0 {
-		configData[string(Authorization)] = "Basic " + base64.StdEncoding.EncodeToString([]byte(c.Username+":"+c.Password))
-	}
-
-	if len(string(c.CAData)) != 0 {
-		configData[string(K8sCertificateAuthority)] = base64.StdEncoding.EncodeToString(bytes.TrimSpace(c.CAData))
-	}
-
-	if len(string(c.TLSClientConfig.KeyData)) != 0 {
-		configData[string(K8sClientKey)] = base64.StdEncoding.EncodeToString(c.TLSClientConfig.KeyData)
-	}
-
-	if len(string(c.TLSClientConfig.CertData)) != 0 {
-		configData[string(K8sClientCertificate)] = base64.StdEncoding.EncodeToString(c.TLSClientConfig.CertData)
-	}
-
-	if len(c.TLSClientConfig.CAFile) != 0 {
-		b, err := ioutil.ReadFile(c.TLSClientConfig.CAFile)
-		if err != nil {
-			log.Println(err)
-		} else {
-			configData[string(K8sCertificateAuthority)] = base64.StdEncoding.EncodeToString(b)
-		}
-	}
-
-	if len(c.TLSClientConfig.CertFile) != 0 {
-		b, err := ioutil.ReadFile(c.TLSClientConfig.CertFile)
-		if err != nil {
-			log.Println(err)
-		} else {
-			configData[string(K8sClientCertificate)] = base64.StdEncoding.EncodeToString(b)
-		}
-	}
-
-	if len(c.TLSClientConfig.KeyFile) != 0 {
-		if len(c.TLSClientConfig.KeyFile) != 0 {
-			b, err := ioutil.ReadFile(c.TLSClientConfig.KeyFile)
-			if err != nil {
-				log.Println(err)
-			} else {
-				configData[string(K8sClientKey)] = base64.StdEncoding.EncodeToString(b)
-			}
-		}
-	}
-	return configData
 }
 
 // ReleaseTestOption allows configuring optional request data for

@@ -17,27 +17,22 @@ limitations under the License.
 package tiller
 
 import (
-	"crypto/x509"
 	"encoding/base64"
-	"encoding/pem"
 	"errors"
 	"fmt"
 	"log"
-	"os"
 	"strings"
 
-	"github.com/spf13/pflag"
 	"golang.org/x/net/context"
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/credentials"
 	"google.golang.org/grpc/metadata"
-	"k8s.io/helm/pkg/helm"
+	"google.golang.org/grpc/peer"
+	"k8s.io/helm/pkg/kube"
 	"k8s.io/helm/pkg/version"
 	authenticationapi "k8s.io/kubernetes/pkg/apis/authentication"
 	clientset "k8s.io/kubernetes/pkg/client/clientset_generated/internalclientset"
 	rest "k8s.io/kubernetes/pkg/client/restclient"
-	"k8s.io/kubernetes/pkg/client/unversioned/clientcmd"
-	clientcmdapi "k8s.io/kubernetes/pkg/client/unversioned/clientcmd/api"
-	utilflag "k8s.io/kubernetes/pkg/util/flag"
 )
 
 // maxMsgSize use 10MB as the default message size limit.
@@ -45,36 +40,36 @@ import (
 var maxMsgSize = 1024 * 1024 * 10
 
 // DefaultServerOpts returns the set of default grpc ServerOption's that Tiller requires.
-func DefaultServerOpts() []grpc.ServerOption {
+func DefaultServerOpts(syscfg *rest.Config) []grpc.ServerOption {
 	return []grpc.ServerOption{
 		grpc.MaxMsgSize(maxMsgSize),
-		grpc.UnaryInterceptor(newUnaryInterceptor()),
-		grpc.StreamInterceptor(newStreamInterceptor()),
+		grpc.UnaryInterceptor(newUnaryInterceptor(syscfg)),
+		grpc.StreamInterceptor(newStreamInterceptor(syscfg)),
 	}
 }
 
 // NewServer creates a new grpc server.
-func NewServer(opts ...grpc.ServerOption) *grpc.Server {
-	return grpc.NewServer(append(DefaultServerOpts(), opts...)...)
+func NewServer(syscfg *rest.Config, opts ...grpc.ServerOption) *grpc.Server {
+	return grpc.NewServer(append(DefaultServerOpts(syscfg), opts...)...)
 }
 
-func authenticate(ctx context.Context) (context.Context, error) {
+func authenticate(ctx context.Context, syscfg *rest.Config) (context.Context, error) {
 	md, ok := metadata.FromContext(ctx)
 	if !ok {
 		return nil, errors.New("Missing metadata in context.")
 	}
 
 	var user *authenticationapi.UserInfo
-	var kubeConfig *rest.Config
+	var usercfg *rest.Config
 	var err error
-	authHeader, ok := md[string(helm.Authorization)]
-	if !ok || authHeader[0] == "" {
-		user, kubeConfig, err = checkClientCert(ctx)
+	authHeader, ok := md[string(kube.Authorization)]
+	if !ok || len(authHeader) == 0 || authHeader[0] == "" {
+		user, usercfg, err = checkClientCert(ctx, syscfg)
 	} else {
 		if strings.HasPrefix(authHeader[0], "Bearer ") {
-			user, kubeConfig, err = checkBearerAuth(ctx)
+			user, usercfg, err = checkBearerAuth(authHeader[0], syscfg)
 		} else if strings.HasPrefix(authHeader[0], "Basic ") {
-			user, kubeConfig, err = checkBasicAuth(ctx)
+			user, usercfg, err = checkBasicAuth(authHeader[0], syscfg)
 		} else {
 			return nil, errors.New("Unknown authorization scheme.")
 		}
@@ -82,8 +77,8 @@ func authenticate(ctx context.Context) (context.Context, error) {
 	if err != nil {
 		return nil, err
 	}
-	ctx = context.WithValue(ctx, helm.K8sUser, user)
-	ctx = context.WithValue(ctx, helm.K8sConfig, kubeConfig)
+	ctx = context.WithValue(ctx, kube.UserInfo, user)
+	ctx = context.WithValue(ctx, kube.UserClientConfig, usercfg)
 
 	// TODO: Remove
 	if user == nil {
@@ -94,7 +89,7 @@ func authenticate(ctx context.Context) (context.Context, error) {
 	return ctx, nil
 }
 
-func newUnaryInterceptor() grpc.UnaryServerInterceptor {
+func newUnaryInterceptor(syscfg *rest.Config) grpc.UnaryServerInterceptor {
 	return func(ctx context.Context, req interface{}, info *grpc.UnaryServerInfo, handler grpc.UnaryHandler) (resp interface{}, err error) {
 		err = checkClientVersion(ctx)
 		if err != nil {
@@ -104,7 +99,7 @@ func newUnaryInterceptor() grpc.UnaryServerInterceptor {
 				return nil, err
 			}
 		}
-		ctx, err = authenticate(ctx)
+		ctx, err = authenticate(ctx, syscfg)
 		if err != nil {
 			log.Println(err)
 			return nil, err
@@ -113,7 +108,7 @@ func newUnaryInterceptor() grpc.UnaryServerInterceptor {
 	}
 }
 
-func newStreamInterceptor() grpc.StreamServerInterceptor {
+func newStreamInterceptor(syscfg *rest.Config) grpc.StreamServerInterceptor {
 	return func(srv interface{}, ss grpc.ServerStream, info *grpc.StreamServerInfo, handler grpc.StreamHandler) error {
 		ctx := ss.Context()
 		err := checkClientVersion(ctx)
@@ -121,7 +116,7 @@ func newStreamInterceptor() grpc.StreamServerInterceptor {
 			log.Println(err)
 			return err
 		}
-		ctx, err = authenticate(ctx)
+		ctx, err = authenticate(ctx, syscfg)
 		if err != nil {
 			log.Println(err)
 			return err
@@ -173,45 +168,10 @@ func checkClientVersion(ctx context.Context) error {
 	return nil
 }
 
-func checkBearerAuth(ctx context.Context) (*authenticationapi.UserInfo, *rest.Config, error) {
-	md, _ := metadata.FromContext(ctx)
-	token := md[string(helm.Authorization)][0][len("Bearer "):]
+func checkBearerAuth(h string, syscfg *rest.Config) (*authenticationapi.UserInfo, *rest.Config, error) {
+	token := h[len("Bearer "):]
 
-	apiServer, err := getServerURL(md)
-	if err != nil {
-		return nil, nil, err
-	}
-	caCert, _ := getCertificateAuthority(md)
-
-	// ref: k8s.io/helm/vendor/k8s.io/kubernetes/pkg/kubectl/cmd/util#NewFactory()
-	flags := pflag.NewFlagSet("", pflag.ContinueOnError)
-	flags.SetNormalizeFunc(utilflag.WarnWordSepNormalizeFunc) // Warn for "_" flags
-	loadingRules := clientcmd.NewDefaultClientConfigLoadingRules()
-	// use the standard defaults for this client command
-	// DEPRECATED: remove and replace with something more accurate
-	loadingRules.DefaultClientConfig = &clientcmd.DefaultClientConfig
-
-	flags.StringVar(&loadingRules.ExplicitPath, "kubeconfig", "", "Path to the kubeconfig file to use for CLI requests.")
-
-	overrides := &clientcmd.ConfigOverrides{
-		ClusterDefaults: clientcmd.ClusterDefaults,
-		ClusterInfo: clientcmdapi.Cluster{
-			Server: apiServer,
-			CertificateAuthorityData: caCert,
-		},
-	}
-
-	flagNames := clientcmd.RecommendedConfigOverrideFlags("")
-	// short flagnames are disabled by default.  These are here for compatibility with existing scripts
-	flagNames.ClusterOverrideFlags.APIServer.ShortName = "s"
-
-	clientcmd.BindOverrideFlags(overrides, flags, flagNames)
-	tokenConfig, err := clientcmd.NewInteractiveDeferredLoadingClientConfig(loadingRules, overrides, os.Stdin).ClientConfig()
-	if err != nil {
-		return nil, nil, err
-	}
-
-	client, err := clientset.NewForConfig(tokenConfig)
+	client, err := clientset.NewForConfig(syscfg)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -229,25 +189,19 @@ func checkBearerAuth(ctx context.Context) (*authenticationapi.UserInfo, *rest.Co
 	if !result.Status.Authenticated {
 		return nil, nil, errors.New("Not authenticated")
 	}
-	kubeConfig := &rest.Config{
-		Host:        apiServer,
+
+	usrcfg := &rest.Config{
+		Host:        syscfg.Host,
+		APIPath:     syscfg.APIPath,
+		Prefix:      syscfg.Prefix,
 		BearerToken: token,
-		TLSClientConfig: rest.TLSClientConfig{
-			CAData: caCert,
-		},
 	}
-	return &result.Status.User, kubeConfig, nil
+	usrcfg.TLSClientConfig.CertData = syscfg.TLSClientConfig.CertData
+	return &result.Status.User, usrcfg, nil
 }
 
-func checkBasicAuth(ctx context.Context) (*authenticationapi.UserInfo, *rest.Config, error) {
-	md, _ := metadata.FromContext(ctx)
-	authz := md[string(helm.Authorization)][0]
-
-	apiServer, err := getServerURL(md)
-	if err != nil {
-		return nil, nil, err
-	}
-	basicAuth, err := base64.StdEncoding.DecodeString(authz[len("Basic "):])
+func checkBasicAuth(h string, syscfg *rest.Config) (*authenticationapi.UserInfo, *rest.Config, error) {
+	basicAuth, err := base64.StdEncoding.DecodeString(h[len("Basic "):])
 	if err != nil {
 		return nil, nil, err
 	}
@@ -255,19 +209,17 @@ func checkBasicAuth(ctx context.Context) (*authenticationapi.UserInfo, *rest.Con
 	if len(username) == 0 || len(password) == 0 {
 		return nil, nil, errors.New("Missing username or password.")
 	}
-	kubeConfig := &rest.Config{
-		Host:     apiServer,
+
+	usrcfg := &rest.Config{
+		Host:     syscfg.Host,
+		APIPath:  syscfg.APIPath,
+		Prefix:   syscfg.Prefix,
 		Username: username,
 		Password: password,
 	}
-	caCert, err := getCertificateAuthority(md)
-	if err == nil {
-		kubeConfig.TLSClientConfig = rest.TLSClientConfig{
-			CAData: caCert,
-		}
-	}
+	usrcfg.TLSClientConfig.CertData = syscfg.TLSClientConfig.CertData
 
-	client, err := clientset.NewForConfig(kubeConfig)
+	client, err := clientset.NewForConfig(usrcfg)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -280,7 +232,7 @@ func checkBasicAuth(ctx context.Context) (*authenticationapi.UserInfo, *rest.Con
 
 	return &authenticationapi.UserInfo{
 		Username: username,
-	}, kubeConfig, nil
+	}, usrcfg, nil
 }
 
 func getUserPasswordFromBasicAuth(token string) (string, string) {
@@ -291,94 +243,25 @@ func getUserPasswordFromBasicAuth(token string) (string, string) {
 	return "", ""
 }
 
-func checkClientCert(ctx context.Context) (*authenticationapi.UserInfo, *rest.Config, error) {
-	md, _ := metadata.FromContext(ctx)
-
-	apiServer, err := getServerURL(md)
-	if err != nil {
-		return nil, nil, err
+func checkClientCert(ctx context.Context, syscfg *rest.Config) (*authenticationapi.UserInfo, *rest.Config, error) {
+	// ref: https://github.com/grpc/grpc-go/issues/111#issuecomment-275820771
+	peer, ok := peer.FromContext(ctx)
+	if !ok {
+		return nil, nil, errors.New("No peer found!")
 	}
-	kubeConfig := &rest.Config{
-		Host: apiServer,
+	tlsInfo, ok := peer.AuthInfo.(credentials.TLSInfo)
+	if !ok {
+		return nil, nil, errors.New("No TLS credential found!")
 	}
-	crt, err := getClientCert(md)
-	if err != nil {
-		return nil, nil, err
-	}
-	key, err := getClientKey(md)
-	if err != nil {
-		return nil, nil, err
-	}
-	kubeConfig.TLSClientConfig = rest.TLSClientConfig{
-		KeyData:  key,
-		CertData: crt,
-	}
-	caCert, err := getCertificateAuthority(md)
-	if err == nil {
-		kubeConfig.TLSClientConfig.CAData = caCert
-	}
-	client, err := clientset.NewForConfig(kubeConfig)
-	if err != nil {
-		return nil, nil, err
+	if len(tlsInfo.State.VerifiedChains) == 0 || len(tlsInfo.State.VerifiedChains[0]) == 0 {
+		return nil, nil, errors.New("No verified client certificate found!")
 	}
 
-	// verify credentials
-	_, err = client.DiscoveryClient.ServerVersion()
-	if err != nil {
-		return nil, nil, err
-	}
-
-	pem, _ := pem.Decode([]byte(crt))
-	c, err := x509.ParseCertificate(pem.Bytes)
-	if err != nil {
-		return nil, nil, err
-	}
-
-	return &authenticationapi.UserInfo{
+	c := tlsInfo.State.VerifiedChains[0][0]
+	user := authenticationapi.UserInfo{
 		Username: c.Subject.CommonName,
-	}, kubeConfig, nil
-}
-
-func getClientCert(md metadata.MD) ([]byte, error) {
-	cert, ok := md[string(helm.K8sClientCertificate)]
-	if !ok {
-		return nil, errors.New("Client certificate not found")
 	}
-	certData, err := base64.StdEncoding.DecodeString(cert[0])
-	if err != nil {
-		return nil, err
-	}
-	return certData, nil
-}
-
-func getClientKey(md metadata.MD) ([]byte, error) {
-	key, ok := md[string(helm.K8sClientKey)]
-	if !ok {
-		return nil, errors.New("Client key not found")
-	}
-	keyData, err := base64.StdEncoding.DecodeString(key[0])
-	if err != nil {
-		return nil, err
-	}
-	return keyData, nil
-}
-
-func getCertificateAuthority(md metadata.MD) ([]byte, error) {
-	caData, ok := md[string(helm.K8sCertificateAuthority)]
-	if !ok {
-		return nil, errors.New("CAcert not found")
-	}
-	caCert, err := base64.StdEncoding.DecodeString(caData[0])
-	if err != nil {
-		return nil, err
-	}
-	return caCert, nil
-}
-
-func getServerURL(md metadata.MD) (string, error) {
-	apiserver, ok := md[string(helm.K8sServer)]
-	if !ok {
-		return "", errors.New("API server url not found")
-	}
-	return apiserver[0], nil
+	usrcfg := *syscfg
+	usrcfg.Impersonate = c.Subject.CommonName
+	return &user, &usrcfg, nil
 }
