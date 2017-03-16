@@ -80,12 +80,6 @@ func authenticate(ctx context.Context, syscfg *rest.Config) (context.Context, er
 	ctx = context.WithValue(ctx, kube.UserInfo, user)
 	ctx = context.WithValue(ctx, kube.UserClientConfig, usercfg)
 
-	// TODO: Remove
-	if user == nil {
-		log.Println("user not found in context")
-	} else {
-		log.Println("authenticated user:", user)
-	}
 	return ctx, nil
 }
 
