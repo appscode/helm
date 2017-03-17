@@ -61,16 +61,16 @@ func authenticate(ctx context.Context, syscfg *rest.Config) (context.Context, er
 	}
 
 	var user *authenticationapi.UserInfo
-	var usercfg *rest.Config
+	var usrcfg *rest.Config
 	var err error
 	authHeader, ok := md[string(kube.Authorization)]
 	if !ok || len(authHeader) == 0 || authHeader[0] == "" {
-		user, usercfg, err = checkClientCert(ctx, syscfg)
+		user, usrcfg, err = checkClientCert(ctx, syscfg)
 	} else {
 		if strings.HasPrefix(authHeader[0], "Bearer ") {
-			user, usercfg, err = checkBearerAuth(authHeader[0], syscfg)
+			user, usrcfg, err = checkBearerAuth(authHeader[0], syscfg)
 		} else if strings.HasPrefix(authHeader[0], "Basic ") {
-			user, usercfg, err = checkBasicAuth(authHeader[0], syscfg)
+			user, usrcfg, err = checkBasicAuth(authHeader[0], syscfg)
 		} else {
 			return nil, errors.New("Unknown authorization scheme.")
 		}
@@ -79,7 +79,8 @@ func authenticate(ctx context.Context, syscfg *rest.Config) (context.Context, er
 		return nil, err
 	}
 	ctx = context.WithValue(ctx, kube.UserInfo, user)
-	ctx = context.WithValue(ctx, kube.UserClientConfig, usercfg)
+	ctx = context.WithValue(ctx, kube.UserClientConfig, usrcfg)
+	ctx = context.WithValue(ctx, kube.SystemClientConfig, syscfg)
 
 	return ctx, nil
 }
