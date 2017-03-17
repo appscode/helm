@@ -31,6 +31,7 @@ import (
 	ctx "golang.org/x/net/context"
 	"google.golang.org/grpc/metadata"
 	"k8s.io/helm/pkg/chartutil"
+	"k8s.io/helm/pkg/helm"
 	"k8s.io/helm/pkg/hooks"
 	"k8s.io/helm/pkg/kube"
 	"k8s.io/helm/pkg/proto/hapi/chart"
@@ -92,15 +93,13 @@ var ValidName = regexp.MustCompile("^(([A-Za-z0-9][-A-Za-z0-9_.]*)?[A-Za-z0-9])+
 
 // ReleaseServer implements the server-side gRPC endpoint for the HAPI services.
 type ReleaseServer struct {
-	env       *environment.Environment
-	clientset internalclientset.Interface
+	env *environment.Environment
 }
 
 // NewReleaseServer creates a new release server.
-func NewReleaseServer(env *environment.Environment, clientset internalclientset.Interface) *ReleaseServer {
+func NewReleaseServer(env *environment.Environment) *ReleaseServer {
 	return &ReleaseServer{
-		env:       env,
-		clientset: clientset,
+		env: env,
 	}
 }
 
@@ -263,7 +262,14 @@ func (s *ReleaseServer) GetReleaseStatus(c ctx.Context, req *services.GetRelease
 
 	// Ok, we got the status of the release as we had jotted down, now we need to match the
 	// manifest we stashed away with reality from the cluster.
-	kubeCli := s.env.KubeClient
+	client := c.Value(kube.UserClient)
+	if client == nil {
+		return nil, errors.New("missing client")
+	}
+	kubeCli, ok := client.(*kube.Client)
+	if !ok {
+		return nil, errors.New("unknown client type")
+	}
 	resp, err := kubeCli.Get(rel.Namespace, bytes.NewBufferString(rel.Manifest))
 	if sc == release.Status_DELETED || sc == release.Status_FAILED {
 		// Skip errors if this is already deleted or failed.
@@ -297,12 +303,12 @@ func (s *ReleaseServer) UpdateRelease(c ctx.Context, req *services.UpdateRelease
 	if err != nil {
 		return nil, err
 	}
-	userKubeClient, err := s.checkForUserSubjectReview(c, updatedRelease)
+	err = s.checkAuthorization(c, updatedRelease)
 	if err != nil {
-		return &services.UpdateReleaseResponse{}, err
+		return nil, err
 	}
 
-	res, err := s.performUpdate(c, currentRelease, updatedRelease, req, userKubeClient)
+	res, err := s.performUpdate(c, currentRelease, updatedRelease, req)
 	if err != nil {
 		return res, err
 	}
@@ -315,7 +321,7 @@ func (s *ReleaseServer) UpdateRelease(c ctx.Context, req *services.UpdateRelease
 	return res, nil
 }
 
-func (s *ReleaseServer) performUpdate(c ctx.Context, originalRelease, updatedRelease *release.Release, req *services.UpdateReleaseRequest, userKubeClient *kube.Client) (*services.UpdateReleaseResponse, error) {
+func (s *ReleaseServer) performUpdate(c ctx.Context, originalRelease, updatedRelease *release.Release, req *services.UpdateReleaseRequest) (*services.UpdateReleaseResponse, error) {
 	res := &services.UpdateReleaseResponse{Release: updatedRelease}
 
 	updatedRelease.Info.Username = getUserName(c)
@@ -327,12 +333,12 @@ func (s *ReleaseServer) performUpdate(c ctx.Context, originalRelease, updatedRel
 
 	// pre-upgrade hooks
 	if !req.DisableHooks {
-		if err := s.execHook(updatedRelease.Hooks, updatedRelease.Name, updatedRelease.Namespace, hooks.PreUpgrade, req.Timeout, userKubeClient); err != nil {
+		if err := s.execHook(c, updatedRelease.Hooks, updatedRelease.Name, updatedRelease.Namespace, hooks.PreUpgrade, req.Timeout); err != nil {
 			return res, err
 		}
 	}
 
-	if err := s.performKubeUpdate(originalRelease, updatedRelease, req.Recreate, req.Timeout, req.Wait, userKubeClient); err != nil {
+	if err := s.performKubeUpdate(c, originalRelease, updatedRelease, req.Recreate, req.Timeout, req.Wait); err != nil {
 		msg := fmt.Sprintf("Upgrade %q failed: %s", updatedRelease.Name, err)
 		log.Printf("warning: %s", msg)
 		originalRelease.Info.Status.Code = release.Status_SUPERSEDED
@@ -345,7 +351,7 @@ func (s *ReleaseServer) performUpdate(c ctx.Context, originalRelease, updatedRel
 
 	// post-upgrade hooks
 	if !req.DisableHooks {
-		if err := s.execHook(updatedRelease.Hooks, updatedRelease.Name, updatedRelease.Namespace, hooks.PostUpgrade, req.Timeout, userKubeClient); err != nil {
+		if err := s.execHook(c, updatedRelease.Hooks, updatedRelease.Name, updatedRelease.Namespace, hooks.PostUpgrade, req.Timeout); err != nil {
 			return res, err
 		}
 	}
@@ -461,12 +467,12 @@ func (s *ReleaseServer) RollbackRelease(c ctx.Context, req *services.RollbackRel
 		return nil, err
 	}
 
-	userKubeClient, err := s.checkForUserSubjectReview(c, targetRelease)
+	err = s.checkAuthorization(c, targetRelease)
 	if err != nil {
 		return &services.RollbackReleaseResponse{}, err
 	}
 
-	res, err := s.performRollback(c, currentRelease, targetRelease, req, userKubeClient)
+	res, err := s.performRollback(c, currentRelease, targetRelease, req)
 	if err != nil {
 		return res, err
 	}
@@ -479,7 +485,7 @@ func (s *ReleaseServer) RollbackRelease(c ctx.Context, req *services.RollbackRel
 	return res, nil
 }
 
-func (s *ReleaseServer) performRollback(c ctx.Context, currentRelease, targetRelease *release.Release, req *services.RollbackReleaseRequest, userKubeClient *kube.Client) (*services.RollbackReleaseResponse, error) {
+func (s *ReleaseServer) performRollback(c ctx.Context, currentRelease, targetRelease *release.Release, req *services.RollbackReleaseRequest) (*services.RollbackReleaseResponse, error) {
 	res := &services.RollbackReleaseResponse{Release: targetRelease}
 
 	targetRelease.Info.Username = getUserName(c)
@@ -491,12 +497,12 @@ func (s *ReleaseServer) performRollback(c ctx.Context, currentRelease, targetRel
 
 	// pre-rollback hooks
 	if !req.DisableHooks {
-		if err := s.execHook(targetRelease.Hooks, targetRelease.Name, targetRelease.Namespace, hooks.PreRollback, req.Timeout, userKubeClient); err != nil {
+		if err := s.execHook(c, targetRelease.Hooks, targetRelease.Name, targetRelease.Namespace, hooks.PreRollback, req.Timeout); err != nil {
 			return res, err
 		}
 	}
 
-	if err := s.performKubeUpdate(currentRelease, targetRelease, req.Recreate, req.Timeout, req.Wait, userKubeClient); err != nil {
+	if err := s.performKubeUpdate(c, currentRelease, targetRelease, req.Recreate, req.Timeout, req.Wait); err != nil {
 		msg := fmt.Sprintf("Rollback %q failed: %s", targetRelease.Name, err)
 		log.Printf("warning: %s", msg)
 		currentRelease.Info.Status.Code = release.Status_SUPERSEDED
@@ -509,7 +515,7 @@ func (s *ReleaseServer) performRollback(c ctx.Context, currentRelease, targetRel
 
 	// post-rollback hooks
 	if !req.DisableHooks {
-		if err := s.execHook(targetRelease.Hooks, targetRelease.Name, targetRelease.Namespace, hooks.PostRollback, req.Timeout, userKubeClient); err != nil {
+		if err := s.execHook(c, targetRelease.Hooks, targetRelease.Name, targetRelease.Namespace, hooks.PostRollback, req.Timeout); err != nil {
 			return res, err
 		}
 	}
@@ -522,8 +528,15 @@ func (s *ReleaseServer) performRollback(c ctx.Context, currentRelease, targetRel
 	return res, nil
 }
 
-func (s *ReleaseServer) performKubeUpdate(currentRelease, targetRelease *release.Release, recreate bool, timeout int64, shouldWait bool, userKubeClient *kube.Client) error {
-	kubeCli := userKubeClient
+func (s *ReleaseServer) performKubeUpdate(c ctx.Context, currentRelease, targetRelease *release.Release, recreate bool, timeout int64, shouldWait bool) error {
+	client := c.Value(kube.UserClient)
+	if client == nil {
+		return errors.New("missing client")
+	}
+	kubeCli, ok := client.(*kube.Client)
+	if !ok {
+		return errors.New("unknown client type")
+	}
 	current := bytes.NewBufferString(currentRelease.Manifest)
 	target := bytes.NewBufferString(targetRelease.Manifest)
 	return kubeCli.Update(targetRelease.Namespace, current, target, recreate, timeout, shouldWait)
@@ -652,11 +665,11 @@ func (s *ReleaseServer) InstallRelease(c ctx.Context, req *services.InstallRelea
 		}
 		return res, err
 	}
-	userKubeClient, err := s.checkForUserSubjectReview(c, rel)
+	err = s.checkAuthorization(c, rel)
 	if err != nil {
 		return &services.InstallReleaseResponse{}, err
 	}
-	res, err := s.performRelease(c, rel, req, userKubeClient)
+	res, err := s.performRelease(c, rel, req)
 	if err != nil {
 		log.Printf("Failed install perform step: %s", err)
 	}
@@ -841,7 +854,7 @@ func (s *ReleaseServer) recordRelease(r *release.Release, reuse bool) {
 }
 
 // performRelease runs a release.
-func (s *ReleaseServer) performRelease(c ctx.Context, r *release.Release, req *services.InstallReleaseRequest, userKubeClient *kube.Client) (*services.InstallReleaseResponse, error) {
+func (s *ReleaseServer) performRelease(c ctx.Context, r *release.Release, req *services.InstallReleaseRequest) (*services.InstallReleaseResponse, error) {
 	res := &services.InstallReleaseResponse{Release: r}
 
 	r.Info.Username = getUserName(c)
@@ -853,7 +866,7 @@ func (s *ReleaseServer) performRelease(c ctx.Context, r *release.Release, req *s
 
 	// pre-install hooks
 	if !req.DisableHooks {
-		if err := s.execHook(r.Hooks, r.Name, r.Namespace, hooks.PreInstall, req.Timeout, userKubeClient); err != nil {
+		if err := s.execHook(c, r.Hooks, r.Name, r.Namespace, hooks.PreInstall, req.Timeout); err != nil {
 			return res, err
 		}
 	}
@@ -875,7 +888,7 @@ func (s *ReleaseServer) performRelease(c ctx.Context, r *release.Release, req *s
 		// so as to append to the old release's history
 		r.Version = old.Version + 1
 
-		if err := s.performKubeUpdate(old, r, false, req.Timeout, req.Wait, userKubeClient); err != nil {
+		if err := s.performKubeUpdate(c, old, r, false, req.Timeout, req.Wait); err != nil {
 			msg := fmt.Sprintf("Release replace %q failed: %s", r.Name, err)
 			log.Printf("warning: %s", msg)
 			old.Info.Status.Code = release.Status_SUPERSEDED
@@ -887,10 +900,18 @@ func (s *ReleaseServer) performRelease(c ctx.Context, r *release.Release, req *s
 		}
 
 	default:
+		client := c.Value(kube.UserClient)
+		if client == nil {
+			return nil, errors.New("missing client")
+		}
+		kubeCli, ok := client.(*kube.Client)
+		if !ok {
+			return nil, errors.New("unknown client type")
+		}
 		// nothing to replace, create as normal
 		// regular manifests
 		b := bytes.NewBufferString(r.Manifest)
-		if err := userKubeClient.Create(r.Namespace, b, req.Timeout, req.Wait); err != nil {
+		if err := kubeCli.Create(r.Namespace, b, req.Timeout, req.Wait); err != nil {
 			msg := fmt.Sprintf("Release %q failed: %s", r.Name, err)
 			log.Printf("warning: %s", msg)
 			r.Info.Status.Code = release.Status_FAILED
@@ -902,7 +923,7 @@ func (s *ReleaseServer) performRelease(c ctx.Context, r *release.Release, req *s
 
 	// post-install hooks
 	if !req.DisableHooks {
-		if err := s.execHook(r.Hooks, r.Name, r.Namespace, hooks.PostInstall, req.Timeout, userKubeClient); err != nil {
+		if err := s.execHook(c, r.Hooks, r.Name, r.Namespace, hooks.PostInstall, req.Timeout); err != nil {
 			msg := fmt.Sprintf("Release %q failed post-install: %s", r.Name, err)
 			log.Printf("warning: %s", msg)
 			r.Info.Status.Code = release.Status_FAILED
@@ -926,8 +947,15 @@ func (s *ReleaseServer) performRelease(c ctx.Context, r *release.Release, req *s
 	return res, nil
 }
 
-func (s *ReleaseServer) execHook(hs []*release.Hook, name, namespace, hook string, timeout int64, userKubeClient *kube.Client) error {
-	kubeCli := userKubeClient
+func (s *ReleaseServer) execHook(ctx ctx.Context, hs []*release.Hook, name, namespace, hook string, timeout int64) error {
+	client := ctx.Value(kube.UserClient)
+	if client == nil {
+		return errors.New("missing client")
+	}
+	kubeCli, ok := client.(*kube.Client)
+	if !ok {
+		return errors.New("unknown client type")
+	}
 	code, ok := events[hook]
 	if !ok {
 		return fmt.Errorf("unknown hook %q", hook)
@@ -996,7 +1024,7 @@ func (s *ReleaseServer) UninstallRelease(c ctx.Context, req *services.UninstallR
 	relutil.SortByRevision(rels)
 	rel := rels[len(rels)-1]
 
-	userKubeClient, err := s.checkForUserSubjectReview(c, &release.Release{Name: req.Name})
+	err = s.checkAuthorization(c, &release.Release{Name: req.Name})
 	if err != nil {
 		return &services.UninstallReleaseResponse{}, err
 	}
@@ -1021,7 +1049,7 @@ func (s *ReleaseServer) UninstallRelease(c ctx.Context, req *services.UninstallR
 	res := &services.UninstallReleaseResponse{Release: rel}
 
 	if !req.DisableHooks {
-		if err := s.execHook(rel.Hooks, rel.Name, rel.Namespace, hooks.PreDelete, req.Timeout, userKubeClient); err != nil {
+		if err := s.execHook(c, rel.Hooks, rel.Name, rel.Namespace, hooks.PreDelete, req.Timeout); err != nil {
 			return res, err
 		}
 	}
@@ -1052,11 +1080,19 @@ func (s *ReleaseServer) UninstallRelease(c ctx.Context, req *services.UninstallR
 		res.Info = summarizeKeptManifests(filesToKeep)
 	}
 
+	client := c.Value(kube.UserClient)
+	if client == nil {
+		return nil, errors.New("missing client")
+	}
+	kubeCli, ok := client.(*kube.Client)
+	if !ok {
+		return nil, errors.New("unknown client type")
+	}
 	// Collect the errors, and return them later.
 	es := []string{}
 	for _, file := range filesToDelete {
 		b := bytes.NewBufferString(file.content)
-		if err := userKubeClient.Delete(rel.Namespace, b); err != nil {
+		if err := kubeCli.Delete(rel.Namespace, b); err != nil {
 			log.Printf("uninstall: Failed deletion of %q: %s", req.Name, err)
 			if err == kube.ErrNoObjectsVisited {
 				// Rewrite the message from "no objects visited"
@@ -1067,7 +1103,7 @@ func (s *ReleaseServer) UninstallRelease(c ctx.Context, req *services.UninstallR
 	}
 
 	if !req.DisableHooks {
-		if err := s.execHook(rel.Hooks, rel.Name, rel.Namespace, hooks.PostDelete, req.Timeout, userKubeClient); err != nil {
+		if err := s.execHook(c, rel.Hooks, rel.Name, rel.Namespace, hooks.PostDelete, req.Timeout); err != nil {
 			es = append(es, err.Error())
 		}
 	}
@@ -1155,10 +1191,10 @@ func getUserName(c ctx.Context) string {
 	return userInfo.Username
 }
 
-func (s *ReleaseServer) checkForUserSubjectReview(c ctx.Context, r *release.Release) (*kube.Client, error) {
+func (s *ReleaseServer) checkAuthorization(c ctx.Context, r *release.Release) error {
 	h, err := s.env.Releases.History(r.Name)
 	if err != driver.ErrReleaseNotFound && err != nil {
-		return nil, err
+		return err
 	}
 	currentRelease := &release.Release{}
 	if len(h) != 0 {
@@ -1301,22 +1337,4 @@ func (s *ReleaseServer) selfSubjectReview(c ctx.Context, targetRelease, currentR
 		return userKubeClient, fmt.Errorf(strings.Join(reviewErrors, " && "))
 	}
 	return userKubeClient, nil
-}
-
-func getClientConfig(overrides *clientcmd.ConfigOverrides) clientcmd.ClientConfig {
-	flags := pflag.NewFlagSet("", pflag.ContinueOnError)
-	flags.SetNormalizeFunc(utilflag.WarnWordSepNormalizeFunc) // Warn for "_" flags
-	loadingRules := clientcmd.NewDefaultClientConfigLoadingRules()
-	// use the standard defaults for this client command
-	// DEPRECATED: remove and replace with something more accurate
-	loadingRules.DefaultClientConfig = &clientcmd.DefaultClientConfig
-
-	flags.StringVar(&loadingRules.ExplicitPath, "kubeconfig", "", "Path to the kubeconfig file to use for CLI requests.")
-
-	flagNames := clientcmd.RecommendedConfigOverrideFlags("")
-	// short flagnames are disabled by default.  These are here for compatibility with existing scripts
-	flagNames.ClusterOverrideFlags.APIServer.ShortName = "s"
-	clientcmd.BindOverrideFlags(overrides, flags, flagNames)
-	clientConfig := clientcmd.NewNonInteractiveDeferredLoadingClientConfig(loadingRules, overrides)
-	return clientConfig
 }
