@@ -50,6 +50,7 @@ import (
 	"k8s.io/kubernetes/pkg/client/unversioned/clientcmd"
 	clientcmdapi "k8s.io/kubernetes/pkg/client/unversioned/clientcmd/api"
 	"k8s.io/kubernetes/pkg/kubectl/resource"
+	"github.com/constabulary/gb/testdata/src/c"
 )
 
 // releaseNameMaxLen is the maximum length of a release name.
@@ -662,7 +663,7 @@ func (s *ReleaseServer) engine(ch *chart.Chart) environment.Engine {
 
 // InstallRelease installs a release and stores the release record.
 func (s *ReleaseServer) InstallRelease(c ctx.Context, req *services.InstallReleaseRequest) (*services.InstallReleaseResponse, error) {
-	rel, err := s.prepareRelease(req)
+	rel, err := s.prepareRelease(c, req)
 	if err != nil {
 		log.Printf("Failed install prepare step: %s", err)
 		res := &services.InstallReleaseResponse{Release: rel}
@@ -703,7 +704,7 @@ func capabilities(disc discovery.DiscoveryInterface) (*chartutil.Capabilities, e
 }
 
 // prepareRelease builds a release for an install operation.
-func (s *ReleaseServer) prepareRelease(req *services.InstallReleaseRequest) (*release.Release, error) {
+func (s *ReleaseServer) prepareRelease(c ctx.Context, req *services.InstallReleaseRequest) (*release.Release, error) {
 	if req.Chart == nil {
 		return nil, errMissingChart
 	}
@@ -713,7 +714,19 @@ func (s *ReleaseServer) prepareRelease(req *services.InstallReleaseRequest) (*re
 		return nil, err
 	}
 
-	caps, err := capabilities(s.clientset.Discovery())
+	client := c.Value(kube.SystemClient)
+	if client == nil {
+		return nil, errors.New("missing client")
+	}
+	kubeClient, ok := client.(*kube.Client)
+	if !ok {
+		return nil, errors.New("unknown client type")
+	}
+	clientset, err := kubeClient.ClientSet()
+	if err != nil {
+		return nil, err
+	}
+	caps, err := capabilities(clientset.Discovery())
 	if err != nil {
 		return nil, err
 	}
@@ -775,7 +788,7 @@ func (s *ReleaseServer) prepareRelease(req *services.InstallReleaseRequest) (*re
 		rel.Info.Status.Notes = notesTxt
 	}
 
-	err = validateManifest(s.env.KubeClient, req.Namespace, manifestDoc.Bytes())
+	err = validateManifest(kubeClient, req.Namespace, manifestDoc.Bytes())
 	return rel, err
 }
 
@@ -1063,7 +1076,19 @@ func (s *ReleaseServer) UninstallRelease(c ctx.Context, req *services.UninstallR
 		}
 	}
 
-	vs, err := getVersionSet(s.clientset.Discovery())
+	client := c.Value(kube.SystemClient)
+	if client == nil {
+		return nil, errors.New("missing client")
+	}
+	kubeClient, ok := client.(*kube.Client)
+	if !ok {
+		return nil, errors.New("unknown client type")
+	}
+	clientset, err := kubeClient.ClientSet()
+	if err != nil {
+		return nil, err
+	}
+	vs, err := getVersionSet(clientset.Discovery())
 	if err != nil {
 		return nil, fmt.Errorf("Could not get apiVersions from Kubernetes: %s", err)
 	}
@@ -1157,9 +1182,17 @@ func (s *ReleaseServer) RunReleaseTest(c ctx.Context, req *services.TestReleaseR
 		return err
 	}
 
+	client := c.Value(kube.SystemClient)
+	if client == nil {
+		return errors.New("missing client")
+	}
+	kubeClient, ok := client.(*kube.Client)
+	if !ok {
+		return errors.New("unknown client type")
+	}
 	testEnv := &reltesting.Environment{
 		Namespace:  rel.Namespace,
-		KubeClient: s.env.KubeClient,
+		KubeClient: kubeClient,
 		Timeout:    req.Timeout,
 		Stream:     stream,
 	}
