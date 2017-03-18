@@ -1222,7 +1222,7 @@ func (s *ReleaseServer) RunReleaseTest(req *services.TestReleaseRequest, stream 
 	return s.env.Releases.Update(rel)
 }
 
-func getKubeClient(c ctx.Context, key kube.AuthHeader) (*kube.Client, error) {
+func getKubeClient(c ctx.Context, key kube.AuthKey) (*kube.Client, error) {
 	client := c.Value(key)
 	if client == nil {
 		return nil, errors.New("missing client")

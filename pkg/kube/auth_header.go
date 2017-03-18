@@ -17,13 +17,12 @@ limitations under the License.
 package kube
 
 //AuthHeader is key type for context
-type AuthHeader string
+type AuthKey string
 
 const (
-	Authorization AuthHeader = "authorization"
-
-	UserInfo         AuthHeader = "k8s-user-info"
-	UserClientConfig AuthHeader = "k8s-user-client-config"
-	UserClient       AuthHeader = "k8s-user-client"
-	SystemClient     AuthHeader = "k8s-sys-client"
+	Authorization    AuthKey = "authorization"
+	UserInfo         AuthKey = "k8s-user-info"
+	UserClientConfig AuthKey = "k8s-user-client-config"
+	UserClient       AuthKey = "k8s-user-client"
+	SystemClient     AuthKey = "k8s-sys-client"
 )
