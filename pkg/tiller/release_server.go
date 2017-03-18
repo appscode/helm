@@ -50,7 +50,6 @@ import (
 	"k8s.io/kubernetes/pkg/client/unversioned/clientcmd"
 	clientcmdapi "k8s.io/kubernetes/pkg/client/unversioned/clientcmd/api"
 	"k8s.io/kubernetes/pkg/kubectl/resource"
-	"github.com/constabulary/gb/testdata/src/c"
 )
 
 // releaseNameMaxLen is the maximum length of a release name.
