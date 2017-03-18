@@ -427,11 +427,11 @@ func (s *ReleaseServer) prepareUpdate(c ctx.Context, req *services.UpdateRelease
 	if client == nil {
 		return nil, nil, errors.New("missing client")
 	}
-	kk, ok := client.(*kube.Client)
+	kubeClient, ok := client.(*kube.Client)
 	if !ok {
 		return nil, nil, errors.New("unknown client type")
 	}
-	clientset, err := kk.ClientSet()
+	clientset, err := kubeClient.ClientSet()
 	if err != nil {
 		return nil, nil, err
 	}
@@ -469,7 +469,7 @@ func (s *ReleaseServer) prepareUpdate(c ctx.Context, req *services.UpdateRelease
 	if len(notesTxt) > 0 {
 		updatedRelease.Info.Status.Notes = notesTxt
 	}
-	err = validateManifest(s.env.KubeClient, currentRelease.Namespace, manifestDoc.Bytes())
+	err = validateManifest(kubeClient, currentRelease.Namespace, manifestDoc.Bytes())
 	return currentRelease, updatedRelease, err
 }
 
