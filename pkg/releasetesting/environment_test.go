@@ -93,8 +93,6 @@ type MockTestingEnvironment struct {
 }
 
 func newMockTestingEnvironment() *MockTestingEnvironment {
-	tEnv := mockTillerEnvironment()
-
 	return &MockTestingEnvironment{
 		Environment: &Environment{
 			Namespace:  "default",
