@@ -1075,11 +1075,11 @@ func (s *ReleaseServer) UninstallRelease(c ctx.Context, req *services.UninstallR
 		}
 	}
 
-	client := c.Value(kube.SystemClient)
-	if client == nil {
+	sysClient := c.Value(kube.SystemClient)
+	if sysClient == nil {
 		return nil, errors.New("missing client")
 	}
-	kubeClient, ok := client.(*kube.Client)
+	kubeClient, ok := sysClient.(*kube.Client)
 	if !ok {
 		return nil, errors.New("unknown client type")
 	}

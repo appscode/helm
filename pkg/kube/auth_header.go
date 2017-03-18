@@ -22,7 +22,8 @@ type AuthHeader string
 const (
 	Authorization AuthHeader = "authorization"
 
-	UserInfo           AuthHeader = "k8s-user-info"
-	UserClient         AuthHeader = "k8s-user-client"
-	SystemClient       AuthHeader = "k8s-sys-client"
+	UserInfo         AuthHeader = "k8s-user-info"
+	UserClientConfig AuthHeader = "k8s-user-client-config"
+	UserClient       AuthHeader = "k8s-user-client"
+	SystemClient     AuthHeader = "k8s-sys-client"
 )
