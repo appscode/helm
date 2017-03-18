@@ -26,7 +26,6 @@ import (
 	"regexp"
 	"strings"
 
-	"github.com/spf13/pflag"
 	"github.com/technosophos/moniker"
 	ctx "golang.org/x/net/context"
 	"google.golang.org/grpc/metadata"
