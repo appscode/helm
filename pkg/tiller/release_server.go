@@ -46,14 +46,10 @@ import (
 	"k8s.io/kubernetes/pkg/api/unversioned"
 	authenticationapi "k8s.io/kubernetes/pkg/apis/authentication"
 	authorizationapi "k8s.io/kubernetes/pkg/apis/authorization"
-	"k8s.io/kubernetes/pkg/client/clientset_generated/internalclientset"
 	"k8s.io/kubernetes/pkg/client/typed/discovery"
 	"k8s.io/kubernetes/pkg/client/unversioned/clientcmd"
 	clientcmdapi "k8s.io/kubernetes/pkg/client/unversioned/clientcmd/api"
 	"k8s.io/kubernetes/pkg/kubectl/resource"
-	utilflag "k8s.io/kubernetes/pkg/util/flag"
-	"github.com/constabulary/gb/testdata/src/c"
-	"github.com/appscode/k8s-addons/client/clientset"
 )
 
 // releaseNameMaxLen is the maximum length of a release name.
