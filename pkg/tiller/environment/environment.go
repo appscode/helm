@@ -206,8 +206,6 @@ type Environment struct {
 	EngineYard EngineYard
 	// Releases stores records of releases.
 	Releases *storage.Storage
-	// KubeClient is a Kubernetes API client.
-	KubeClient KubeClient
 }
 
 // New returns an environment initialized with the defaults.
@@ -222,6 +220,5 @@ func New() *Environment {
 	return &Environment{
 		EngineYard: ey,
 		Releases:   storage.Init(driver.NewMemory()),
-		KubeClient: kube.New(nil),
 	}
 }

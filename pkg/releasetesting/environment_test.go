@@ -98,7 +98,7 @@ func newMockTestingEnvironment() *MockTestingEnvironment {
 	return &MockTestingEnvironment{
 		Environment: &Environment{
 			Namespace:  "default",
-			KubeClient: tEnv.KubeClient,
+			KubeClient: newPodSucceededKubeClient(),
 			Timeout:    5,
 			Stream:     &mockStream{},
 		},

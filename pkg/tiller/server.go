@@ -20,7 +20,9 @@ import (
 	"encoding/base64"
 	"errors"
 	"fmt"
+	"io/ioutil"
 	"log"
+	"os"
 	"strings"
 
 	"golang.org/x/net/context"
@@ -28,12 +30,13 @@ import (
 	"google.golang.org/grpc/credentials"
 	"google.golang.org/grpc/metadata"
 	"google.golang.org/grpc/peer"
+	authenticationapi "k8s.io/kubernetes/pkg/apis/authentication"
+	rest "k8s.io/kubernetes/pkg/client/restclient"
+	"k8s.io/kubernetes/pkg/client/unversioned/clientcmd"
+	clientcmdapi "k8s.io/kubernetes/pkg/client/unversioned/clientcmd/api"
+
 	"k8s.io/helm/pkg/kube"
 	"k8s.io/helm/pkg/version"
-
-	authenticationapi "k8s.io/kubernetes/pkg/apis/authentication"
-	clientset "k8s.io/kubernetes/pkg/client/clientset_generated/internalclientset"
-	rest "k8s.io/kubernetes/pkg/client/restclient"
 )
 
 // maxMsgSize use 10MB as the default message size limit.
@@ -60,29 +63,20 @@ func authenticate(ctx context.Context, syscfg *rest.Config) (context.Context, er
 		return nil, errors.New("Missing metadata in context.")
 	}
 
-	var user *authenticationapi.UserInfo
-	var usrcfg *rest.Config
 	var err error
 	authHeader, ok := md[string(kube.Authorization)]
 	if !ok || len(authHeader) == 0 || authHeader[0] == "" {
-		user, usrcfg, err = checkClientCert(ctx, syscfg)
+		err = checkClientCert(ctx, syscfg)
 	} else {
 		if strings.HasPrefix(authHeader[0], "Bearer ") {
-			user, usrcfg, err = checkBearerAuth(authHeader[0], syscfg)
+			err = checkBearerAuth(ctx, authHeader[0], syscfg)
 		} else if strings.HasPrefix(authHeader[0], "Basic ") {
-			user, usrcfg, err = checkBasicAuth(authHeader[0], syscfg)
+			err = checkBasicAuth(ctx, authHeader[0], syscfg)
 		} else {
 			return nil, errors.New("Unknown authorization scheme.")
 		}
 	}
-	if err != nil {
-		return nil, err
-	}
-	ctx = context.WithValue(ctx, kube.UserInfo, user)
-	ctx = context.WithValue(ctx, kube.UserClientConfig, usrcfg)
-	ctx = context.WithValue(ctx, kube.SystemClientConfig, syscfg)
-
-	return ctx, nil
+	return ctx, err
 }
 
 func newUnaryInterceptor(syscfg *rest.Config) grpc.UnaryServerInterceptor {
@@ -164,12 +158,13 @@ func checkClientVersion(ctx context.Context) error {
 	return nil
 }
 
-func checkBearerAuth(h string, syscfg *rest.Config) (*authenticationapi.UserInfo, *rest.Config, error) {
+func checkBearerAuth(ctx context.Context, h string, syscfg *rest.Config) error {
 	token := h[len("Bearer "):]
 
-	client, err := clientset.NewForConfig(syscfg)
+	sysClient := kube.New(&wrapClientConfig{cfg: syscfg})
+	clientset, err := sysClient.ClientSet()
 	if err != nil {
-		return nil, nil, err
+		return err
 	}
 
 	// verify token
@@ -178,12 +173,12 @@ func checkBearerAuth(h string, syscfg *rest.Config) (*authenticationapi.UserInfo
 			Token: token,
 		},
 	}
-	result, err := client.AuthenticationClient.TokenReviews().Create(tokenReq)
+	result, err := clientset.AuthenticationClient.TokenReviews().Create(tokenReq)
 	if err != nil {
-		return nil, nil, err
+		return err
 	}
 	if !result.Status.Authenticated {
-		return nil, nil, errors.New("Not authenticated")
+		return errors.New("Not authenticated")
 	}
 
 	usrcfg := &rest.Config{
@@ -193,17 +188,22 @@ func checkBearerAuth(h string, syscfg *rest.Config) (*authenticationapi.UserInfo
 		BearerToken: token,
 	}
 	usrcfg.TLSClientConfig.CertData = syscfg.TLSClientConfig.CertData
-	return &result.Status.User, usrcfg, nil
+
+	ctx = context.WithValue(ctx, kube.UserInfo, &result.Status.User)
+	ctx = context.WithValue(ctx, kube.UserClientConfig, usrcfg)
+	ctx = context.WithValue(ctx, kube.UserClient, kube.New(&wrapClientConfig{cfg: usrcfg}))
+	ctx = context.WithValue(ctx, kube.SystemClient, sysClient)
+	return nil
 }
 
-func checkBasicAuth(h string, syscfg *rest.Config) (*authenticationapi.UserInfo, *rest.Config, error) {
+func checkBasicAuth(ctx context.Context, h string, syscfg *rest.Config) error {
 	basicAuth, err := base64.StdEncoding.DecodeString(h[len("Basic "):])
 	if err != nil {
-		return nil, nil, err
+		return err
 	}
 	username, password := getUserPasswordFromBasicAuth(string(basicAuth))
 	if len(username) == 0 || len(password) == 0 {
-		return nil, nil, errors.New("Missing username or password.")
+		return errors.New("Missing username or password.")
 	}
 
 	usrcfg := &rest.Config{
@@ -215,20 +215,25 @@ func checkBasicAuth(h string, syscfg *rest.Config) (*authenticationapi.UserInfo,
 	}
 	usrcfg.TLSClientConfig.CertData = syscfg.TLSClientConfig.CertData
 
-	client, err := clientset.NewForConfig(usrcfg)
+	usrClient := kube.New(&wrapClientConfig{cfg: usrcfg})
+	clientset, err := usrClient.ClientSet()
 	if err != nil {
-		return nil, nil, err
+		return err
 	}
 
 	// verify credentials
-	_, err = client.DiscoveryClient.ServerVersion()
+	_, err = clientset.DiscoveryClient.ServerVersion()
 	if err != nil {
-		return nil, nil, err
+		return err
 	}
 
-	return &authenticationapi.UserInfo{
+	ctx = context.WithValue(ctx, kube.UserInfo, &authenticationapi.UserInfo{
 		Username: username,
-	}, usrcfg, nil
+	})
+	ctx = context.WithValue(ctx, kube.UserClientConfig, usrcfg)
+	ctx = context.WithValue(ctx, kube.UserClient, usrClient)
+	ctx = context.WithValue(ctx, kube.SystemClient, kube.New(&wrapClientConfig{cfg: syscfg}))
+	return nil
 }
 
 func getUserPasswordFromBasicAuth(token string) (string, string) {
@@ -239,18 +244,18 @@ func getUserPasswordFromBasicAuth(token string) (string, string) {
 	return "", ""
 }
 
-func checkClientCert(ctx context.Context, syscfg *rest.Config) (*authenticationapi.UserInfo, *rest.Config, error) {
+func checkClientCert(ctx context.Context, syscfg *rest.Config) error {
 	// ref: https://github.com/grpc/grpc-go/issues/111#issuecomment-275820771
 	peer, ok := peer.FromContext(ctx)
 	if !ok {
-		return nil, nil, errors.New("No peer found!")
+		return errors.New("No peer found!")
 	}
 	tlsInfo, ok := peer.AuthInfo.(credentials.TLSInfo)
 	if !ok {
-		return nil, nil, errors.New("No TLS credential found!")
+		return errors.New("No TLS credential found!")
 	}
 	if len(tlsInfo.State.VerifiedChains) == 0 || len(tlsInfo.State.VerifiedChains[0]) == 0 {
-		return nil, nil, errors.New("No verified client certificate found!")
+		return errors.New("No verified client certificate found!")
 	}
 
 	c := tlsInfo.State.VerifiedChains[0][0]
@@ -259,5 +264,46 @@ func checkClientCert(ctx context.Context, syscfg *rest.Config) (*authenticationa
 	}
 	usrcfg := *syscfg
 	usrcfg.Impersonate = c.Subject.CommonName
-	return &user, &usrcfg, nil
+
+	ctx = context.WithValue(ctx, kube.UserInfo, &user)
+	ctx = context.WithValue(ctx, kube.UserClientConfig, &usrcfg)
+	ctx = context.WithValue(ctx, kube.UserClient, kube.New(&wrapClientConfig{cfg: &usrcfg}))
+	ctx = context.WithValue(ctx, kube.SystemClient, kube.New(&wrapClientConfig{cfg: syscfg}))
+	return nil
+}
+
+// wrapClientConfig makes a config that wraps a kubeconfig
+type wrapClientConfig struct {
+	cfg *rest.Config
+}
+
+var _ clientcmd.ClientConfig = wrapClientConfig{}
+
+func (wrapClientConfig) RawConfig() (clientcmdapi.Config, error) {
+	return clientcmdapi.Config{}, fmt.Errorf("inCluster environment config doesn't support multiple clusters")
+}
+
+func (w wrapClientConfig) ClientConfig() (*rest.Config, error) {
+	return w.cfg, nil
+}
+
+func (wrapClientConfig) Namespace() (string, bool, error) {
+	// This way assumes you've set the POD_NAMESPACE environment variable using the downward API.
+	// This check has to be done first for backwards compatibility with the way InClusterConfig was originally set up
+	if ns := os.Getenv("POD_NAMESPACE"); ns != "" {
+		return ns, true, nil
+	}
+
+	// Fall back to the namespace associated with the service account token, if available
+	if data, err := ioutil.ReadFile("/var/run/secrets/kubernetes.io/serviceaccount/namespace"); err == nil {
+		if ns := strings.TrimSpace(string(data)); len(ns) > 0 {
+			return ns, true, nil
+		}
+	}
+
+	return "default", false, nil
+}
+
+func (wrapClientConfig) ConfigAccess() clientcmd.ConfigAccess {
+	return clientcmd.NewDefaultClientConfigLoadingRules()
 }
