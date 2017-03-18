@@ -52,6 +52,8 @@ import (
 	clientcmdapi "k8s.io/kubernetes/pkg/client/unversioned/clientcmd/api"
 	"k8s.io/kubernetes/pkg/kubectl/resource"
 	utilflag "k8s.io/kubernetes/pkg/util/flag"
+	"github.com/constabulary/gb/testdata/src/c"
+	"github.com/appscode/k8s-addons/client/clientset"
 )
 
 // releaseNameMaxLen is the maximum length of a release name.
@@ -298,7 +300,7 @@ func (s *ReleaseServer) GetReleaseContent(c ctx.Context, req *services.GetReleas
 
 // UpdateRelease takes an existing release and new information, and upgrades the release.
 func (s *ReleaseServer) UpdateRelease(c ctx.Context, req *services.UpdateReleaseRequest) (*services.UpdateReleaseResponse, error) {
-	currentRelease, updatedRelease, err := s.prepareUpdate(req)
+	currentRelease, updatedRelease, err := s.prepareUpdate(c, req)
 	if err != nil {
 		return nil, err
 	}
@@ -390,7 +392,7 @@ func (s *ReleaseServer) reuseValues(req *services.UpdateReleaseRequest, current 
 }
 
 // prepareUpdate builds an updated release for an update operation.
-func (s *ReleaseServer) prepareUpdate(req *services.UpdateReleaseRequest) (*release.Release, *release.Release, error) {
+func (s *ReleaseServer) prepareUpdate(c ctx.Context, req *services.UpdateReleaseRequest) (*release.Release, *release.Release, error) {
 	if !ValidName.MatchString(req.Name) {
 		return nil, nil, errMissingRelease
 	}
@@ -421,7 +423,19 @@ func (s *ReleaseServer) prepareUpdate(req *services.UpdateReleaseRequest) (*rele
 		Revision:  int(revision),
 	}
 
-	caps, err := capabilities(s.clientset.Discovery())
+	client := c.Value(kube.SystemClient)
+	if client == nil {
+		return nil, nil, errors.New("missing client")
+	}
+	kk, ok := client.(*kube.Client)
+	if !ok {
+		return nil, nil, errors.New("unknown client type")
+	}
+	clientset, err := kk.ClientSet()
+	if err != nil {
+		return nil, nil, err
+	}
+	caps, err := capabilities(clientset.Discovery())
 	if err != nil {
 		return nil, nil, err
 	}
@@ -1135,7 +1149,7 @@ func validateManifest(c environment.KubeClient, ns string, manifest []byte) erro
 }
 
 // RunReleaseTest runs pre-defined tests stored as hooks on a given release
-func (s *ReleaseServer) RunReleaseTest(req *services.TestReleaseRequest, stream services.ReleaseService_RunReleaseTestServer) error {
+func (s *ReleaseServer) RunReleaseTest(c ctx.Context, req *services.TestReleaseRequest, stream services.ReleaseService_RunReleaseTestServer) error {
 
 	if !ValidName.MatchString(req.Name) {
 		return errMissingRelease
