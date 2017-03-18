@@ -435,13 +435,9 @@ func (s *ReleaseServer) prepareUpdate(c ctx.Context, req *services.UpdateRelease
 		Revision:  int(revision),
 	}
 
-	client := c.Value(kube.SystemClient)
-	if client == nil {
-		return nil, nil, errors.New("missing client")
-	}
-	kubeClient, ok := client.(*kube.Client)
-	if !ok {
-		return nil, nil, errors.New("unknown client type")
+	kubeClient, err := getKubeClient(c, kube.SystemClient)
+	if err != nil {
+		return nil, nil, err
 	}
 	clientset, err := kubeClient.ClientSet()
 	if err != nil {
@@ -725,13 +721,9 @@ func (s *ReleaseServer) prepareRelease(c ctx.Context, req *services.InstallRelea
 		return nil, err
 	}
 
-	client := c.Value(kube.SystemClient)
-	if client == nil {
-		return nil, errors.New("missing client")
-	}
-	kubeClient, ok := client.(*kube.Client)
-	if !ok {
-		return nil, errors.New("unknown client type")
+	kubeClient, err := getKubeClient(c, kube.SystemClient)
+	if err != nil {
+		return nil, err
 	}
 	clientset, err := kubeClient.ClientSet()
 	if err != nil {
@@ -1183,17 +1175,13 @@ func (s *ReleaseServer) RunReleaseTest(req *services.TestReleaseRequest, stream 
 		return err
 	}
 
-	client := stream.Context().Value(kube.SystemClient)
-	if client == nil {
-		return errors.New("missing client")
-	}
-	kubeClient, ok := client.(*kube.Client)
-	if !ok {
-		return errors.New("unknown client type")
+	sysCli, err := getKubeClient(stream.Context(), kube.SystemClient)
+	if err != nil {
+		return err
 	}
 	testEnv := &reltesting.Environment{
 		Namespace:  rel.Namespace,
-		KubeClient: kubeClient,
+		KubeClient: sysCli,
 		Timeout:    req.Timeout,
 		Stream:     stream,
 	}
