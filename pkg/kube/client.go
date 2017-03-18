@@ -37,6 +37,8 @@ import (
 	ext "k8s.io/kubernetes/pkg/apis/extensions"
 	extensions "k8s.io/kubernetes/pkg/apis/extensions/v1beta1"
 	"k8s.io/kubernetes/pkg/client/clientset_generated/internalclientset"
+	"k8s.io/kubernetes/pkg/client/clientset_generated/internalclientset/typed/authorization/internalversion"
+	"k8s.io/kubernetes/pkg/client/typed/discovery"
 	conditions "k8s.io/kubernetes/pkg/client/unversioned"
 	"k8s.io/kubernetes/pkg/client/unversioned/clientcmd"
 	deploymentutil "k8s.io/kubernetes/pkg/controller/deployment/util"
@@ -77,6 +79,24 @@ func New(config clientcmd.ClientConfig) *Client {
 
 // ResourceActorFunc performs an action on a single resource.
 type ResourceActorFunc func(*resource.Info) error
+
+// Discovery retrieves the DiscoveryClient
+func (c *Client) Discovery() (discovery.DiscoveryInterface, error) {
+	client, err := c.ClientSet()
+	if err != nil {
+		return nil, err
+	}
+	return client.Discovery(), nil
+}
+
+// Authorization retrieves the AuthorizationInterface
+func (c *Client) Authorization() (internalversion.AuthorizationInterface, error) {
+	client, err := c.ClientSet()
+	if err != nil {
+		return nil, err
+	}
+	return client.Authorization(), nil
+}
 
 // Create creates kubernetes resources from an io.reader
 //

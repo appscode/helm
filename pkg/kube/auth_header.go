@@ -20,9 +20,9 @@ package kube
 type AuthKey string
 
 const (
-	Authorization    AuthKey = "authorization"
-	UserInfo         AuthKey = "k8s-user-info"
-	UserClientConfig AuthKey = "k8s-user-client-config"
-	UserClient       AuthKey = "k8s-user-client"
-	SystemClient     AuthKey = "k8s-sys-client"
+	Authorization   AuthKey = "authorization"
+	UserInfo        AuthKey = "k8s-user-info"
+	UserClient      AuthKey = "k8s-user-client"
+	SystemClient    AuthKey = "k8s-sys-client"
+	ImpersonateUser AuthKey = "k8s-impersonate-user"
 )

@@ -190,7 +190,6 @@ func checkBearerAuth(ctx context.Context, h string, syscfg *rest.Config) error {
 	usrcfg.TLSClientConfig.CertData = syscfg.TLSClientConfig.CertData
 
 	ctx = context.WithValue(ctx, kube.UserInfo, &result.Status.User)
-	ctx = context.WithValue(ctx, kube.UserClientConfig, usrcfg)
 	ctx = context.WithValue(ctx, kube.UserClient, kube.New(&wrapClientConfig{cfg: usrcfg}))
 	ctx = context.WithValue(ctx, kube.SystemClient, sysClient)
 	return nil
@@ -230,7 +229,6 @@ func checkBasicAuth(ctx context.Context, h string, syscfg *rest.Config) error {
 	ctx = context.WithValue(ctx, kube.UserInfo, &authenticationapi.UserInfo{
 		Username: username,
 	})
-	ctx = context.WithValue(ctx, kube.UserClientConfig, usrcfg)
 	ctx = context.WithValue(ctx, kube.UserClient, usrClient)
 	ctx = context.WithValue(ctx, kube.SystemClient, kube.New(&wrapClientConfig{cfg: syscfg}))
 	return nil
@@ -266,9 +264,9 @@ func checkClientCert(ctx context.Context, syscfg *rest.Config) error {
 	usrcfg.Impersonate = c.Subject.CommonName
 
 	ctx = context.WithValue(ctx, kube.UserInfo, &user)
-	ctx = context.WithValue(ctx, kube.UserClientConfig, &usrcfg)
 	ctx = context.WithValue(ctx, kube.UserClient, kube.New(&wrapClientConfig{cfg: &usrcfg}))
 	ctx = context.WithValue(ctx, kube.SystemClient, kube.New(&wrapClientConfig{cfg: syscfg}))
+	ctx = context.WithValue(ctx, kube.ImpersonateUser, struct{}{})
 	return nil
 }
 

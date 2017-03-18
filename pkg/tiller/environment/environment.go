@@ -26,14 +26,18 @@ import (
 	"io"
 	"time"
 
+	"k8s.io/kubernetes/pkg/api"
+	"k8s.io/kubernetes/pkg/client/clientset_generated/internalclientset"
+	"k8s.io/kubernetes/pkg/client/clientset_generated/internalclientset/typed/authorization/internalversion"
+	"k8s.io/kubernetes/pkg/client/typed/discovery"
+	"k8s.io/kubernetes/pkg/kubectl/resource"
+
 	"k8s.io/helm/pkg/chartutil"
 	"k8s.io/helm/pkg/engine"
 	"k8s.io/helm/pkg/kube"
 	"k8s.io/helm/pkg/proto/hapi/chart"
 	"k8s.io/helm/pkg/storage"
 	"k8s.io/helm/pkg/storage/driver"
-	"k8s.io/kubernetes/pkg/api"
-	"k8s.io/kubernetes/pkg/kubectl/resource"
 )
 
 // DefaultTillerNamespace is the default namespace for tiller.
@@ -142,13 +146,22 @@ type KubeClient interface {
 	// WaitAndGetCompletedPodPhase waits up to a timeout until a pod enters a completed phase
 	// and returns said phase (PodSucceeded or PodFailed qualify)
 	WaitAndGetCompletedPodPhase(namespace string, reader io.Reader, timeout time.Duration) (api.PodPhase, error)
+
+	// Discovery retrieves the DiscoveryClient
+	Discovery() (discovery.DiscoveryInterface, error)
+
+	// Authorization retrieves the AuthorizationInterface
+	Authorization() (internalversion.AuthorizationInterface, error)
 }
 
 // PrintingKubeClient implements KubeClient, but simply prints the reader to
 // the given output.
 type PrintingKubeClient struct {
-	Out io.Writer
+	Out       io.Writer
+	Clientset internalclientset.Interface
 }
+
+var _ KubeClient = &PrintingKubeClient{}
 
 // Create prints the values of what would be created with a real KubeClient.
 func (p *PrintingKubeClient) Create(ns string, r io.Reader, timeout int64, shouldWait bool) error {
@@ -196,6 +209,16 @@ func (p *PrintingKubeClient) BuildUnstructured(ns string, reader io.Reader) (kub
 func (p *PrintingKubeClient) WaitAndGetCompletedPodPhase(namespace string, reader io.Reader, timeout time.Duration) (api.PodPhase, error) {
 	_, err := io.Copy(p.Out, reader)
 	return api.PodUnknown, err
+}
+
+// Discovery retrieves the DiscoveryClient
+func (p *PrintingKubeClient) Discovery() (discovery.DiscoveryInterface, error) {
+	return p.Clientset.Discovery(), nil
+}
+
+// Authorization retrieves the AuthorizationInterface
+func (p *PrintingKubeClient) Authorization() (internalversion.AuthorizationInterface, error) {
+	return p.Clientset.Authorization(), nil
 }
 
 // Environment provides the context for executing a client request.

@@ -31,7 +31,6 @@ import (
 	"k8s.io/kubernetes/pkg/api/unversioned"
 	authenticationapi "k8s.io/kubernetes/pkg/apis/authentication"
 	authorizationapi "k8s.io/kubernetes/pkg/apis/authorization"
-	rest "k8s.io/kubernetes/pkg/client/restclient"
 	"k8s.io/kubernetes/pkg/client/typed/discovery"
 	"k8s.io/kubernetes/pkg/kubectl/resource"
 
@@ -439,11 +438,11 @@ func (s *ReleaseServer) prepareUpdate(c ctx.Context, req *services.UpdateRelease
 	if err != nil {
 		return nil, nil, err
 	}
-	clientset, err := kubeClient.ClientSet()
+	disc, err := kubeClient.Discovery()
 	if err != nil {
 		return nil, nil, err
 	}
-	caps, err := capabilities(clientset.Discovery())
+	caps, err := capabilities(disc)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -725,11 +724,11 @@ func (s *ReleaseServer) prepareRelease(c ctx.Context, req *services.InstallRelea
 	if err != nil {
 		return nil, err
 	}
-	clientset, err := kubeClient.ClientSet()
+	disc, err := kubeClient.Discovery()
 	if err != nil {
 		return nil, err
 	}
-	caps, err := capabilities(clientset.Discovery())
+	caps, err := capabilities(disc)
 	if err != nil {
 		return nil, err
 	}
@@ -1073,19 +1072,15 @@ func (s *ReleaseServer) UninstallRelease(c ctx.Context, req *services.UninstallR
 		}
 	}
 
-	sysClient := c.Value(kube.SystemClient)
-	if sysClient == nil {
-		return nil, errors.New("missing client")
-	}
-	kubeClient, ok := sysClient.(*kube.Client)
-	if !ok {
-		return nil, errors.New("unknown client type")
-	}
-	clientset, err := kubeClient.ClientSet()
+	syscli, err := getKubeClient(c, kube.SystemClient)
 	if err != nil {
 		return nil, err
 	}
-	vs, err := getVersionSet(clientset.Discovery())
+	disc, err := syscli.Discovery()
+	if err != nil {
+		return nil, err
+	}
+	vs, err := getVersionSet(disc)
 	if err != nil {
 		return nil, fmt.Errorf("Could not get apiVersions from Kubernetes: %s", err)
 	}
@@ -1210,16 +1205,16 @@ func (s *ReleaseServer) RunReleaseTest(req *services.TestReleaseRequest, stream 
 	return s.env.Releases.Update(rel)
 }
 
-func getKubeClient(c ctx.Context, key kube.AuthKey) (*kube.Client, error) {
+func getKubeClient(c ctx.Context, key kube.AuthKey) (environment.KubeClient, error) {
 	client := c.Value(key)
 	if client == nil {
 		return nil, errors.New("missing client")
 	}
-	kubeCli, ok := client.(*kube.Client)
+	cli, ok := client.(environment.KubeClient)
 	if !ok {
 		return nil, errors.New("unknown client type")
 	}
-	return kubeCli, nil
+	return cli, nil
 }
 
 func getUserName(c ctx.Context) string {
@@ -1258,16 +1253,7 @@ func (s *ReleaseServer) checkAuthorization(c ctx.Context, targetRelease *release
 		return fmt.Errorf("failed decoding reader into objects: %s", err)
 	}
 
-	cfg := c.Value(kube.UserClientConfig)
-	if cfg == nil {
-		return errors.New("missing user client config")
-	}
-	usrcfg, ok := cfg.(*rest.Config)
-	if !ok {
-		return errors.New("unknown client config type")
-	}
-
-	if usrcfg.Impersonate != "" {
+	if c.Value(kube.ImpersonateUser) != nil {
 		// client cert
 		return s.runSubjectReview(c, targetManifest, currentManifest)
 	}
@@ -1280,13 +1266,13 @@ func (s *ReleaseServer) runSelfSubjectReview(c ctx.Context, target, current kube
 	if err != nil {
 		return err
 	}
-	clientset, err := usrCli.ClientSet()
+	authzClient, err := usrCli.Authorization()
 	if err != nil {
 		return err
 	}
 
 	selfReview := func(sar *authorizationapi.SelfSubjectAccessReview) error {
-		result, err := clientset.AuthorizationClient.SelfSubjectAccessReviews().Create(sar)
+		result, err := authzClient.SelfSubjectAccessReviews().Create(sar)
 		if err != nil {
 			return err
 		}
@@ -1369,14 +1355,14 @@ func (s *ReleaseServer) runSubjectReview(c ctx.Context, target, current kube.Res
 	if err != nil {
 		return err
 	}
-	clientset, err := sysCli.ClientSet()
+	authzClient, err := sysCli.Authorization()
 	if err != nil {
 		return err
 	}
 	user := getUserName(c)
 
 	subReview := func(sar *authorizationapi.SubjectAccessReview) error {
-		result, err := clientset.AuthorizationClient.SubjectAccessReviews().Create(sar)
+		result, err := authzClient.SubjectAccessReviews().Create(sar)
 		if err != nil {
 			return err
 		}
