@@ -20,7 +20,9 @@ import (
 	"encoding/base64"
 	"errors"
 	"fmt"
+	"io/ioutil"
 	"log"
+	"os"
 	"strings"
 
 	"golang.org/x/net/context"
@@ -28,15 +30,13 @@ import (
 	"google.golang.org/grpc/credentials"
 	"google.golang.org/grpc/metadata"
 	"google.golang.org/grpc/peer"
-	"k8s.io/helm/pkg/kube"
-	"k8s.io/helm/pkg/version"
-
-	"io/ioutil"
 	authenticationapi "k8s.io/kubernetes/pkg/apis/authentication"
 	rest "k8s.io/kubernetes/pkg/client/restclient"
 	"k8s.io/kubernetes/pkg/client/unversioned/clientcmd"
 	clientcmdapi "k8s.io/kubernetes/pkg/client/unversioned/clientcmd/api"
-	"os"
+
+	"k8s.io/helm/pkg/kube"
+	"k8s.io/helm/pkg/version"
 )
 
 // maxMsgSize use 10MB as the default message size limit.

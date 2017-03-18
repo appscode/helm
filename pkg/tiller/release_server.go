@@ -27,6 +27,14 @@ import (
 
 	"github.com/technosophos/moniker"
 	ctx "golang.org/x/net/context"
+	kubeerrors "k8s.io/kubernetes/pkg/api/errors"
+	"k8s.io/kubernetes/pkg/api/unversioned"
+	authenticationapi "k8s.io/kubernetes/pkg/apis/authentication"
+	authorizationapi "k8s.io/kubernetes/pkg/apis/authorization"
+	rest "k8s.io/kubernetes/pkg/client/restclient"
+	"k8s.io/kubernetes/pkg/client/typed/discovery"
+	"k8s.io/kubernetes/pkg/kubectl/resource"
+
 	"k8s.io/helm/pkg/chartutil"
 	"k8s.io/helm/pkg/hooks"
 	"k8s.io/helm/pkg/kube"
@@ -39,13 +47,6 @@ import (
 	"k8s.io/helm/pkg/tiller/environment"
 	"k8s.io/helm/pkg/timeconv"
 	"k8s.io/helm/pkg/version"
-	kubeerrors "k8s.io/kubernetes/pkg/api/errors"
-	"k8s.io/kubernetes/pkg/api/unversioned"
-	authenticationapi "k8s.io/kubernetes/pkg/apis/authentication"
-	authorizationapi "k8s.io/kubernetes/pkg/apis/authorization"
-	rest "k8s.io/kubernetes/pkg/client/restclient"
-	"k8s.io/kubernetes/pkg/client/typed/discovery"
-	"k8s.io/kubernetes/pkg/kubectl/resource"
 )
 
 // releaseNameMaxLen is the maximum length of a release name.

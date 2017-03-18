@@ -22,12 +22,13 @@ import (
 	"compress/gzip"
 	"errors"
 	"fmt"
-	"github.com/facebookgo/symwalk"
 	"io"
 	"io/ioutil"
 	"os"
 	"path/filepath"
 	"strings"
+
+	"github.com/facebookgo/symwalk"
 
 	"github.com/golang/protobuf/ptypes/any"
 
