@@ -18,7 +18,6 @@ package tiller
 
 import (
 	"bytes"
-	"encoding/base64"
 	"errors"
 	"fmt"
 	"log"
@@ -26,11 +25,10 @@ import (
 	"regexp"
 	"strings"
 
+	rest "k8s.io/kubernetes/pkg/client/restclient"
 	"github.com/technosophos/moniker"
 	ctx "golang.org/x/net/context"
-	"google.golang.org/grpc/metadata"
 	"k8s.io/helm/pkg/chartutil"
-	"k8s.io/helm/pkg/helm"
 	"k8s.io/helm/pkg/hooks"
 	"k8s.io/helm/pkg/kube"
 	"k8s.io/helm/pkg/proto/hapi/chart"
@@ -47,8 +45,6 @@ import (
 	authenticationapi "k8s.io/kubernetes/pkg/apis/authentication"
 	authorizationapi "k8s.io/kubernetes/pkg/apis/authorization"
 	"k8s.io/kubernetes/pkg/client/typed/discovery"
-	"k8s.io/kubernetes/pkg/client/unversioned/clientcmd"
-	clientcmdapi "k8s.io/kubernetes/pkg/client/unversioned/clientcmd/api"
 	"k8s.io/kubernetes/pkg/kubectl/resource"
 )
 
@@ -259,13 +255,9 @@ func (s *ReleaseServer) GetReleaseStatus(c ctx.Context, req *services.GetRelease
 
 	// Ok, we got the status of the release as we had jotted down, now we need to match the
 	// manifest we stashed away with reality from the cluster.
-	client := c.Value(kube.UserClient)
-	if client == nil {
-		return nil, errors.New("missing client")
-	}
-	kubeCli, ok := client.(*kube.Client)
-	if !ok {
-		return nil, errors.New("unknown client type")
+	kubeCli, err := getKubeClient(c, kube.UserClient)
+	if err != nil {
+		return nil, err
 	}
 	resp, err := kubeCli.Get(rel.Namespace, bytes.NewBufferString(rel.Manifest))
 	if sc == release.Status_DELETED || sc == release.Status_FAILED {
@@ -538,13 +530,9 @@ func (s *ReleaseServer) performRollback(c ctx.Context, currentRelease, targetRel
 }
 
 func (s *ReleaseServer) performKubeUpdate(c ctx.Context, currentRelease, targetRelease *release.Release, recreate bool, timeout int64, shouldWait bool) error {
-	client := c.Value(kube.UserClient)
-	if client == nil {
-		return errors.New("missing client")
-	}
-	kubeCli, ok := client.(*kube.Client)
-	if !ok {
-		return errors.New("unknown client type")
+	kubeCli, err := getKubeClient(c, kube.UserClient)
+	if err != nil {
+		return err
 	}
 	current := bytes.NewBufferString(currentRelease.Manifest)
 	target := bytes.NewBufferString(targetRelease.Manifest)
@@ -921,13 +909,9 @@ func (s *ReleaseServer) performRelease(c ctx.Context, r *release.Release, req *s
 		}
 
 	default:
-		client := c.Value(kube.UserClient)
-		if client == nil {
-			return nil, errors.New("missing client")
-		}
-		kubeCli, ok := client.(*kube.Client)
-		if !ok {
-			return nil, errors.New("unknown client type")
+		kubeCli, err := getKubeClient(c, kube.UserClient)
+		if err != nil {
+			return nil, err
 		}
 		// nothing to replace, create as normal
 		// regular manifests
@@ -968,14 +952,10 @@ func (s *ReleaseServer) performRelease(c ctx.Context, r *release.Release, req *s
 	return res, nil
 }
 
-func (s *ReleaseServer) execHook(ctx ctx.Context, hs []*release.Hook, name, namespace, hook string, timeout int64) error {
-	client := ctx.Value(kube.UserClient)
-	if client == nil {
-		return errors.New("missing client")
-	}
-	kubeCli, ok := client.(*kube.Client)
-	if !ok {
-		return errors.New("unknown client type")
+func (s *ReleaseServer) execHook(c ctx.Context, hs []*release.Hook, name, namespace, hook string, timeout int64) error {
+	kubeCli, err := getKubeClient(c, kube.UserClient)
+	if err != nil {
+		return err
 	}
 	code, ok := events[hook]
 	if !ok {
@@ -1113,13 +1093,9 @@ func (s *ReleaseServer) UninstallRelease(c ctx.Context, req *services.UninstallR
 		res.Info = summarizeKeptManifests(filesToKeep)
 	}
 
-	client := c.Value(kube.UserClient)
-	if client == nil {
-		return nil, errors.New("missing client")
-	}
-	kubeCli, ok := client.(*kube.Client)
-	if !ok {
-		return nil, errors.New("unknown client type")
+	kubeCli, err := getKubeClient(c, kube.UserClient)
+	if err != nil {
+		return nil, err
 	}
 	// Collect the errors, and return them later.
 	es := []string{}
@@ -1220,6 +1196,18 @@ func (s *ReleaseServer) RunReleaseTest(c ctx.Context, req *services.TestReleaseR
 	return s.env.Releases.Update(rel)
 }
 
+func getKubeClient(c ctx.Context, key kube.AuthHeader) (*kube.Client, error) {
+	client := c.Value(key)
+	if client == nil {
+		return nil, errors.New("missing client")
+	}
+	kubeCli, ok := client.(*kube.Client)
+	if !ok {
+		return nil, errors.New("unknown client type")
+	}
+	return kubeCli, nil
+}
+
 func getUserName(c ctx.Context) string {
 	user := c.Value(kube.UserInfo)
 	if user == nil {
@@ -1232,8 +1220,8 @@ func getUserName(c ctx.Context) string {
 	return userInfo.Username
 }
 
-func (s *ReleaseServer) checkAuthorization(c ctx.Context, r *release.Release) error {
-	h, err := s.env.Releases.History(r.Name)
+func (s *ReleaseServer) checkAuthorization(c ctx.Context, targetRelease *release.Release) error {
+	h, err := s.env.Releases.History(targetRelease.Name)
 	if err != driver.ErrReleaseNotFound && err != nil {
 		return err
 	}
@@ -1242,81 +1230,61 @@ func (s *ReleaseServer) checkAuthorization(c ctx.Context, r *release.Release) er
 		relutil.Reverse(h, relutil.SortByRevision)
 		currentRelease = h[0]
 	}
-	return s.selfSubjectReview(c, r, currentRelease)
+
+	sysCli, err := getKubeClient(c, kube.SystemClient)
+	if err != nil {
+		return err
+	}
+	currentManifest, err := sysCli.BuildUnstructured(targetRelease.Namespace, bytes.NewBufferString(currentRelease.Manifest))
+	if err != nil {
+		return fmt.Errorf("failed decoding reader into objects: %s", err)
+	}
+	targetManifest, err := sysCli.BuildUnstructured(targetRelease.Namespace, bytes.NewBufferString(targetRelease.Manifest))
+	if err != nil {
+		return fmt.Errorf("failed decoding reader into objects: %s", err)
+	}
+
+
+	cfg := c.Value(kube.UserClientConfig)
+	if cfg == nil {
+		return errors.New("missing user client config")
+	}
+	usrcfg, ok := cfg.(*rest.Config)
+	if !ok {
+		return errors.New("unknown client config type")
+	}
+
+	if usrcfg.Impersonate != "" {
+		// client cert
+	} else {
+
+	}
+
+	return s.runSubjectReview(c, targetManifest, currentManifest)
 }
 
-func (s *ReleaseServer) selfSubjectReview(c ctx.Context, targetRelease, currentRelease *release.Release) (*kube.Client, error) {
-	var reviewErrors []string
-	var err error
-	md, _ := metadata.FromContext(c)
-	caCert, _ := getCertificateAuthority(md)
-	apiServer, _ := getServerURL(md)
-	overrides := &clientcmd.ConfigOverrides{
-		ClusterDefaults: clientcmd.ClusterDefaults,
-		ClusterInfo: clientcmdapi.Cluster{
-			Server: apiServer,
-			CertificateAuthorityData: caCert,
-		},
-	}
-	authHeader, ok := md[string(helm.Authorization)]
-	if ok {
-		if strings.HasPrefix(authHeader[0], "Bearer ") {
-			token := authHeader[0][len("Bearer "):]
-			overrides.AuthInfo.Token = token
-		} else if strings.HasPrefix(authHeader[0], "Basic ") {
-			basicAuth, err := base64.StdEncoding.DecodeString(authHeader[0][len("Basic "):])
-			if err != nil {
-				return nil, err
-			}
-			username, password := getUserPasswordFromBasicAuth(string(basicAuth))
-			if len(username) == 0 || len(password) == 0 {
-				return nil, errors.New("Missing username or password.")
-			}
-			overrides.AuthInfo.Username = username
-			overrides.AuthInfo.Password = password
-		}
-	} else {
-		clientCert, err := getClientCert(md)
-		if err != nil {
-			return nil, err
-		}
-		clientKey, err := getClientKey(md)
-		if err != nil {
-			return nil, err
-		}
-		overrides.AuthInfo.ClientCertificateData = clientCert
-		overrides.AuthInfo.ClientKeyData = clientKey
-	}
-	clientConfig := getClientConfig(overrides)
-	userKubeClient := kube.New(clientConfig)
-	currentBuffer := bytes.NewBufferString(currentRelease.Manifest)
-	targetBuffer := bytes.NewBufferString(targetRelease.Manifest)
-
-	original, err := s.env.KubeClient.BuildUnstructured(targetRelease.Namespace, currentBuffer)
+func (s *ReleaseServer) runSubjectReview(c ctx.Context, target, current kube.Result) error {
+	usrCli, err := getKubeClient(c, kube.UserClient)
 	if err != nil {
-		return userKubeClient, fmt.Errorf("failed decoding reader into objects: %s", err)
+		return err
 	}
-
-	target, err := s.env.KubeClient.BuildUnstructured(targetRelease.Namespace, targetBuffer)
+	clientset, err := usrCli.ClientSet()
 	if err != nil {
-		return userKubeClient, fmt.Errorf("failed decoding reader into objects: %s", err)
+		return err
 	}
 
 	selfReview := func(sar *authorizationapi.SelfSubjectAccessReview) error {
-		client, err := userKubeClient.ClientSet()
-		if err != nil {
-			return err
-		}
-		result, err := client.AuthorizationClient.SelfSubjectAccessReviews().Create(sar)
+		result, err := clientset.AuthorizationClient.SelfSubjectAccessReviews().Create(sar)
 		if err != nil {
 			return err
 		}
 		if !result.Status.Allowed {
-			return errors.New(fmt.Sprint("User %s dont have access %s", getUserName(c), sar.Spec.ResourceAttributes.Resource))
+			return errors.New(fmt.Sprintf("User %s dont have access %s", getUserName(c), sar.Spec.ResourceAttributes.Resource))
 		}
 		return nil
 	}
 
+	var reviewErrors []string
 	err = target.Visit(func(info *resource.Info, err error) error {
 		if err != nil {
 			return err
@@ -1342,7 +1310,7 @@ func (s *ReleaseServer) selfSubjectReview(c ctx.Context, targetRelease, currentR
 				reviewErrors = append(reviewErrors, err.Error())
 			}
 		}
-		originalInfo := original.Get(info)
+		originalInfo := current.Get(info)
 		if originalInfo == nil {
 			return fmt.Errorf("no resource with the name %s found", info.Name)
 		}
@@ -1358,7 +1326,11 @@ func (s *ReleaseServer) selfSubjectReview(c ctx.Context, targetRelease, currentR
 		}
 		return nil
 	})
-	for _, info := range original.Difference(target) {
+	if err != nil {
+		reviewErrors = append(reviewErrors, err.Error())
+	}
+
+	for _, info := range current.Difference(target) {
 		err = selfReview(&authorizationapi.SelfSubjectAccessReview{
 			Spec: authorizationapi.SelfSubjectAccessReviewSpec{
 				ResourceAttributes: &authorizationapi.ResourceAttributes{
@@ -1375,7 +1347,7 @@ func (s *ReleaseServer) selfSubjectReview(c ctx.Context, targetRelease, currentR
 		}
 	}
 	if len(reviewErrors) != 0 {
-		return userKubeClient, fmt.Errorf(strings.Join(reviewErrors, " && "))
+		return fmt.Errorf(strings.Join(reviewErrors, " && "))
 	}
-	return userKubeClient, nil
+	return nil
 }

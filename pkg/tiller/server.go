@@ -239,14 +239,14 @@ func checkClientCert(ctx context.Context, syscfg *rest.Config) error {
 	// ref: https://github.com/grpc/grpc-go/issues/111#issuecomment-275820771
 	peer, ok := peer.FromContext(ctx)
 	if !ok {
-		return nil, nil, errors.New("No peer found!")
+		return errors.New("No peer found!")
 	}
 	tlsInfo, ok := peer.AuthInfo.(credentials.TLSInfo)
 	if !ok {
-		return nil, nil, errors.New("No TLS credential found!")
+		return errors.New("No TLS credential found!")
 	}
 	if len(tlsInfo.State.VerifiedChains) == 0 || len(tlsInfo.State.VerifiedChains[0]) == 0 {
-		return nil, nil, errors.New("No verified client certificate found!")
+		return errors.New("No verified client certificate found!")
 	}
 
 	c := tlsInfo.State.VerifiedChains[0][0]
