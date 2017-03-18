@@ -25,7 +25,7 @@ import (
 	"os"
 	"strings"
 
-	"golang.org/x/net/context"
+	ctx "golang.org/x/net/context"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials"
 	"google.golang.org/grpc/metadata"
@@ -57,8 +57,8 @@ func NewServer(syscfg *rest.Config, opts ...grpc.ServerOption) *grpc.Server {
 	return grpc.NewServer(append(DefaultServerOpts(syscfg), opts...)...)
 }
 
-func authenticate(ctx context.Context, syscfg *rest.Config) (context.Context, error) {
-	md, ok := metadata.FromContext(ctx)
+func authenticate(c ctx.Context, syscfg *rest.Config) (ctx.Context, error) {
+	md, ok := metadata.FromContext(c)
 	if !ok {
 		return nil, errors.New("Missing metadata in context.")
 	}
@@ -66,21 +66,21 @@ func authenticate(ctx context.Context, syscfg *rest.Config) (context.Context, er
 	var err error
 	authHeader, ok := md[string(kube.Authorization)]
 	if !ok || len(authHeader) == 0 || authHeader[0] == "" {
-		err = checkClientCert(ctx, syscfg)
+		c, err = checkClientCert(c, syscfg)
 	} else {
 		if strings.HasPrefix(authHeader[0], "Bearer ") {
-			err = checkBearerAuth(ctx, authHeader[0], syscfg)
+			c, err = checkBearerAuth(c, authHeader[0], syscfg)
 		} else if strings.HasPrefix(authHeader[0], "Basic ") {
-			err = checkBasicAuth(ctx, authHeader[0], syscfg)
+			c, err = checkBasicAuth(c, authHeader[0], syscfg)
 		} else {
 			return nil, errors.New("Unknown authorization scheme.")
 		}
 	}
-	return ctx, err
+	return c, err
 }
 
 func newUnaryInterceptor(syscfg *rest.Config) grpc.UnaryServerInterceptor {
-	return func(ctx context.Context, req interface{}, info *grpc.UnaryServerInfo, handler grpc.UnaryHandler) (resp interface{}, err error) {
+	return func(ctx ctx.Context, req interface{}, info *grpc.UnaryServerInfo, handler grpc.UnaryHandler) (resp interface{}, err error) {
 		err = checkClientVersion(ctx)
 		if err != nil {
 			// whitelist GetVersion() from the version check
@@ -124,10 +124,10 @@ func newStreamInterceptor(syscfg *rest.Config) grpc.StreamServerInterceptor {
 // this modified context will be available inside handler()
 type serverStreamWrapper struct {
 	ss  grpc.ServerStream
-	ctx context.Context
+	ctx ctx.Context
 }
 
-func (w serverStreamWrapper) Context() context.Context        { return w.ctx }
+func (w serverStreamWrapper) Context() ctx.Context            { return w.ctx }
 func (w serverStreamWrapper) RecvMsg(msg interface{}) error   { return w.ss.RecvMsg(msg) }
 func (w serverStreamWrapper) SendMsg(msg interface{}) error   { return w.ss.SendMsg(msg) }
 func (w serverStreamWrapper) SendHeader(md metadata.MD) error { return w.ss.SendHeader(md) }
@@ -141,7 +141,7 @@ func splitMethod(fullMethod string) (string, string) {
 	return "unknown", "unknown"
 }
 
-func versionFromContext(ctx context.Context) string {
+func versionFromContext(ctx ctx.Context) string {
 	if md, ok := metadata.FromContext(ctx); ok {
 		if v, ok := md["x-helm-api-client"]; ok && len(v) > 0 {
 			return v[0]
@@ -150,7 +150,7 @@ func versionFromContext(ctx context.Context) string {
 	return ""
 }
 
-func checkClientVersion(ctx context.Context) error {
+func checkClientVersion(ctx ctx.Context) error {
 	clientVersion := versionFromContext(ctx)
 	if !version.IsCompatible(clientVersion, version.Version) {
 		return fmt.Errorf("incompatible versions client: %s server: %s", clientVersion, version.Version)
@@ -158,13 +158,13 @@ func checkClientVersion(ctx context.Context) error {
 	return nil
 }
 
-func checkBearerAuth(ctx context.Context, h string, syscfg *rest.Config) error {
+func checkBearerAuth(c ctx.Context, h string, syscfg *rest.Config) (ctx.Context, error) {
 	token := h[len("Bearer "):]
 
 	sysClient := kube.New(&wrapClientConfig{cfg: syscfg})
 	clientset, err := sysClient.ClientSet()
 	if err != nil {
-		return err
+		return c, err
 	}
 
 	// verify token
@@ -175,10 +175,10 @@ func checkBearerAuth(ctx context.Context, h string, syscfg *rest.Config) error {
 	}
 	result, err := clientset.AuthenticationClient.TokenReviews().Create(tokenReq)
 	if err != nil {
-		return err
+		return c, err
 	}
 	if !result.Status.Authenticated {
-		return errors.New("Not authenticated")
+		return c, errors.New("Not authenticated")
 	}
 
 	usrcfg := &rest.Config{
@@ -189,20 +189,20 @@ func checkBearerAuth(ctx context.Context, h string, syscfg *rest.Config) error {
 	}
 	usrcfg.TLSClientConfig.CertData = syscfg.TLSClientConfig.CertData
 
-	ctx = context.WithValue(ctx, kube.UserInfo, &result.Status.User)
-	ctx = context.WithValue(ctx, kube.UserClient, kube.New(&wrapClientConfig{cfg: usrcfg}))
-	ctx = context.WithValue(ctx, kube.SystemClient, sysClient)
-	return nil
+	c = ctx.WithValue(c, kube.UserInfo, &result.Status.User)
+	c = ctx.WithValue(c, kube.UserClient, kube.New(&wrapClientConfig{cfg: usrcfg}))
+	c = ctx.WithValue(c, kube.SystemClient, sysClient)
+	return c, nil
 }
 
-func checkBasicAuth(ctx context.Context, h string, syscfg *rest.Config) error {
+func checkBasicAuth(c ctx.Context, h string, syscfg *rest.Config) (ctx.Context, error) {
 	basicAuth, err := base64.StdEncoding.DecodeString(h[len("Basic "):])
 	if err != nil {
-		return err
+		return c, err
 	}
 	username, password := getUserPasswordFromBasicAuth(string(basicAuth))
 	if len(username) == 0 || len(password) == 0 {
-		return errors.New("Missing username or password.")
+		return c, errors.New("Missing username or password.")
 	}
 
 	usrcfg := &rest.Config{
@@ -217,21 +217,21 @@ func checkBasicAuth(ctx context.Context, h string, syscfg *rest.Config) error {
 	usrClient := kube.New(&wrapClientConfig{cfg: usrcfg})
 	clientset, err := usrClient.ClientSet()
 	if err != nil {
-		return err
+		return c, err
 	}
 
 	// verify credentials
 	_, err = clientset.DiscoveryClient.ServerVersion()
 	if err != nil {
-		return err
+		return c, err
 	}
 
-	ctx = context.WithValue(ctx, kube.UserInfo, &authenticationapi.UserInfo{
+	c = ctx.WithValue(c, kube.UserInfo, &authenticationapi.UserInfo{
 		Username: username,
 	})
-	ctx = context.WithValue(ctx, kube.UserClient, usrClient)
-	ctx = context.WithValue(ctx, kube.SystemClient, kube.New(&wrapClientConfig{cfg: syscfg}))
-	return nil
+	c = ctx.WithValue(c, kube.UserClient, usrClient)
+	c = ctx.WithValue(c, kube.SystemClient, kube.New(&wrapClientConfig{cfg: syscfg}))
+	return c, nil
 }
 
 func getUserPasswordFromBasicAuth(token string) (string, string) {
@@ -242,32 +242,32 @@ func getUserPasswordFromBasicAuth(token string) (string, string) {
 	return "", ""
 }
 
-func checkClientCert(ctx context.Context, syscfg *rest.Config) error {
+func checkClientCert(c ctx.Context, syscfg *rest.Config) (ctx.Context, error) {
 	// ref: https://github.com/grpc/grpc-go/issues/111#issuecomment-275820771
-	peer, ok := peer.FromContext(ctx)
+	peer, ok := peer.FromContext(c)
 	if !ok {
-		return errors.New("No peer found!")
+		return c, errors.New("No peer found!")
 	}
 	tlsInfo, ok := peer.AuthInfo.(credentials.TLSInfo)
 	if !ok {
-		return errors.New("No TLS credential found!")
+		return c, errors.New("No TLS credential found!")
 	}
 	if len(tlsInfo.State.VerifiedChains) == 0 || len(tlsInfo.State.VerifiedChains[0]) == 0 {
-		return errors.New("No verified client certificate found!")
+		return c, errors.New("No verified client certificate found!")
 	}
 
-	c := tlsInfo.State.VerifiedChains[0][0]
+	crt := tlsInfo.State.VerifiedChains[0][0]
 	user := authenticationapi.UserInfo{
-		Username: c.Subject.CommonName,
+		Username: crt.Subject.CommonName,
 	}
 	usrcfg := *syscfg
-	usrcfg.Impersonate = c.Subject.CommonName
+	usrcfg.Impersonate = crt.Subject.CommonName
 
-	ctx = context.WithValue(ctx, kube.UserInfo, &user)
-	ctx = context.WithValue(ctx, kube.UserClient, kube.New(&wrapClientConfig{cfg: &usrcfg}))
-	ctx = context.WithValue(ctx, kube.SystemClient, kube.New(&wrapClientConfig{cfg: syscfg}))
-	ctx = context.WithValue(ctx, kube.ImpersonateUser, struct{}{})
-	return nil
+	c = ctx.WithValue(c, kube.UserInfo, &user)
+	c = ctx.WithValue(c, kube.UserClient, kube.New(&wrapClientConfig{cfg: &usrcfg}))
+	c = ctx.WithValue(c, kube.SystemClient, kube.New(&wrapClientConfig{cfg: syscfg}))
+	c = ctx.WithValue(c, kube.ImpersonateUser, struct{}{})
+	return c, nil
 }
 
 // wrapClientConfig makes a config that wraps a kubeconfig

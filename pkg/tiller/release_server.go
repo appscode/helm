@@ -1277,7 +1277,7 @@ func (s *ReleaseServer) runSelfSubjectReview(c ctx.Context, target, current kube
 			return err
 		}
 		if !result.Status.Allowed {
-			return errors.New(fmt.Sprintf("User %s dont have access %s", getUserName(c), sar.Spec.ResourceAttributes.Resource))
+			return fmt.Errorf("User %s dont have access %s", getUserName(c), sar.Spec.ResourceAttributes.Resource)
 		}
 		return nil
 	}
@@ -1367,7 +1367,7 @@ func (s *ReleaseServer) runSubjectReview(c ctx.Context, target, current kube.Res
 			return err
 		}
 		if !result.Status.Allowed {
-			return errors.New(fmt.Sprintf("User %s dont have access %s", getUserName(c), sar.Spec.ResourceAttributes.Resource))
+			return fmt.Errorf("User %s dont have access %s", getUserName(c), sar.Spec.ResourceAttributes.Resource)
 		}
 		return nil
 	}
