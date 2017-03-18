@@ -31,8 +31,12 @@ import (
 	"k8s.io/helm/pkg/kube"
 	"k8s.io/helm/pkg/version"
 
+	"io/ioutil"
 	authenticationapi "k8s.io/kubernetes/pkg/apis/authentication"
 	rest "k8s.io/kubernetes/pkg/client/restclient"
+	"k8s.io/kubernetes/pkg/client/unversioned/clientcmd"
+	clientcmdapi "k8s.io/kubernetes/pkg/client/unversioned/clientcmd/api"
+	"os"
 )
 
 // maxMsgSize use 10MB as the default message size limit.
@@ -152,7 +156,7 @@ func checkClientVersion(ctx context.Context) error {
 func checkBearerAuth(ctx context.Context, h string, syscfg *rest.Config) error {
 	token := h[len("Bearer "):]
 
-	sysClient := kube.New(syscfg)
+	sysClient := kube.New(&wrapClientConfig{cfg: syscfg})
 	clientset, err := sysClient.ClientSet()
 	if err != nil {
 		return err
@@ -182,7 +186,7 @@ func checkBearerAuth(ctx context.Context, h string, syscfg *rest.Config) error {
 
 	ctx = context.WithValue(ctx, kube.UserInfo, &result.Status.User)
 	ctx = context.WithValue(ctx, kube.UserClientConfig, usrcfg)
-	ctx = context.WithValue(ctx, kube.UserClient, kube.New(usrcfg))
+	ctx = context.WithValue(ctx, kube.UserClient, kube.New(&wrapClientConfig{cfg: usrcfg}))
 	ctx = context.WithValue(ctx, kube.SystemClient, sysClient)
 	return nil
 }
@@ -206,7 +210,7 @@ func checkBasicAuth(ctx context.Context, h string, syscfg *rest.Config) error {
 	}
 	usrcfg.TLSClientConfig.CertData = syscfg.TLSClientConfig.CertData
 
-	usrClient := kube.New(usrcfg)
+	usrClient := kube.New(&wrapClientConfig{cfg: usrcfg})
 	clientset, err := usrClient.ClientSet()
 	if err != nil {
 		return err
@@ -223,7 +227,7 @@ func checkBasicAuth(ctx context.Context, h string, syscfg *rest.Config) error {
 	})
 	ctx = context.WithValue(ctx, kube.UserClientConfig, usrcfg)
 	ctx = context.WithValue(ctx, kube.UserClient, usrClient)
-	ctx = context.WithValue(ctx, kube.SystemClient, kube.New(syscfg))
+	ctx = context.WithValue(ctx, kube.SystemClient, kube.New(&wrapClientConfig{cfg: syscfg}))
 	return nil
 }
 
@@ -258,7 +262,43 @@ func checkClientCert(ctx context.Context, syscfg *rest.Config) error {
 
 	ctx = context.WithValue(ctx, kube.UserInfo, &user)
 	ctx = context.WithValue(ctx, kube.UserClientConfig, &usrcfg)
-	ctx = context.WithValue(ctx, kube.UserClient, kube.New(&usrcfg))
-	ctx = context.WithValue(ctx, kube.SystemClient, kube.New(syscfg))
+	ctx = context.WithValue(ctx, kube.UserClient, kube.New(&wrapClientConfig{cfg: &usrcfg}))
+	ctx = context.WithValue(ctx, kube.SystemClient, kube.New(&wrapClientConfig{cfg: syscfg}))
 	return nil
+}
+
+// wrapClientConfig makes a config that wraps a kubeconfig
+type wrapClientConfig struct {
+	cfg *rest.Config
+}
+
+var _ clientcmd.ClientConfig = wrapClientConfig{}
+
+func (wrapClientConfig) RawConfig() (clientcmdapi.Config, error) {
+	return clientcmdapi.Config{}, fmt.Errorf("inCluster environment config doesn't support multiple clusters")
+}
+
+func (w wrapClientConfig) ClientConfig() (*rest.Config, error) {
+	return w.cfg, nil
+}
+
+func (wrapClientConfig) Namespace() (string, bool, error) {
+	// This way assumes you've set the POD_NAMESPACE environment variable using the downward API.
+	// This check has to be done first for backwards compatibility with the way InClusterConfig was originally set up
+	if ns := os.Getenv("POD_NAMESPACE"); ns != "" {
+		return ns, true, nil
+	}
+
+	// Fall back to the namespace associated with the service account token, if available
+	if data, err := ioutil.ReadFile("/var/run/secrets/kubernetes.io/serviceaccount/namespace"); err == nil {
+		if ns := strings.TrimSpace(string(data)); len(ns) > 0 {
+			return ns, true, nil
+		}
+	}
+
+	return "default", false, nil
+}
+
+func (wrapClientConfig) ConfigAccess() clientcmd.ConfigAccess {
+	return clientcmd.NewDefaultClientConfigLoadingRules()
 }

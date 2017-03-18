@@ -25,7 +25,6 @@ import (
 	"regexp"
 	"strings"
 
-	rest "k8s.io/kubernetes/pkg/client/restclient"
 	"github.com/technosophos/moniker"
 	ctx "golang.org/x/net/context"
 	"k8s.io/helm/pkg/chartutil"
@@ -44,6 +43,7 @@ import (
 	"k8s.io/kubernetes/pkg/api/unversioned"
 	authenticationapi "k8s.io/kubernetes/pkg/apis/authentication"
 	authorizationapi "k8s.io/kubernetes/pkg/apis/authorization"
+	rest "k8s.io/kubernetes/pkg/client/restclient"
 	"k8s.io/kubernetes/pkg/client/typed/discovery"
 	"k8s.io/kubernetes/pkg/kubectl/resource"
 )
@@ -1145,7 +1145,7 @@ func validateManifest(c environment.KubeClient, ns string, manifest []byte) erro
 }
 
 // RunReleaseTest runs pre-defined tests stored as hooks on a given release
-func (s *ReleaseServer) RunReleaseTest(c ctx.Context, req *services.TestReleaseRequest, stream services.ReleaseService_RunReleaseTestServer) error {
+func (s *ReleaseServer) RunReleaseTest(req *services.TestReleaseRequest, stream services.ReleaseService_RunReleaseTestServer) error {
 
 	if !ValidName.MatchString(req.Name) {
 		return errMissingRelease
@@ -1157,7 +1157,7 @@ func (s *ReleaseServer) RunReleaseTest(c ctx.Context, req *services.TestReleaseR
 		return err
 	}
 
-	client := c.Value(kube.SystemClient)
+	client := stream.Context().Value(kube.SystemClient)
 	if client == nil {
 		return errors.New("missing client")
 	}
@@ -1243,7 +1243,6 @@ func (s *ReleaseServer) checkAuthorization(c ctx.Context, targetRelease *release
 	if err != nil {
 		return fmt.Errorf("failed decoding reader into objects: %s", err)
 	}
-
 
 	cfg := c.Value(kube.UserClientConfig)
 	if cfg == nil {
