@@ -29,7 +29,6 @@ import (
 	"strings"
 
 	"github.com/facebookgo/symwalk"
-
 	"github.com/golang/protobuf/ptypes/any"
 
 	"k8s.io/helm/pkg/ignore"
