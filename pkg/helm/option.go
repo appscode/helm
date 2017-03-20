@@ -98,8 +98,7 @@ func WithTLS(cfg *tls.Config) Option {
 }
 
 // WithContext returns an option that allows adding metadata to context of a helm client rpc
-// before being sent OTA to tiller. The intercepting function should return
-// an error to indicate that the call should not proceed or nil otherwise.
+// before being sent OTA to tiller.
 func WithContext(fn func(context.Context) context.Context) Option {
 	return func(opts *options) {
 		opts.withContext = fn
