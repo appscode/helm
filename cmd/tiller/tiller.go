@@ -127,11 +127,6 @@ func start(c *cobra.Command, args []string) {
 		fmt.Fprintf(os.Stderr, "Cannot initialize Kubernetes connection: %s\n", err)
 		os.Exit(1)
 	}
-	syscfg, err := client.ClientConfig()
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "Cannot initialize Kubernetes connection: %s\n", err)
-		os.Exit(1)
-	}
 
 	switch store {
 	case storageMemory:
@@ -158,7 +153,7 @@ func start(c *cobra.Command, args []string) {
 		opts = append(opts, grpc.Creds(credentials.NewTLS(cfg)))
 	}
 
-	rootServer = tiller.NewServer(opts...)
+	rootServer = tiller.NewServer(clientset, opts...)
 
 	lstn, err := net.Listen("tcp", grpcAddr)
 	if err != nil {
@@ -179,7 +174,6 @@ func start(c *cobra.Command, args []string) {
 	probeErrCh := make(chan error)
 	go func() {
 		svc := tiller.NewReleaseServer(env)
-		rootServer := tiller.NewServer(syscfg)
 		services.RegisterReleaseServiceServer(rootServer, svc)
 		if err := rootServer.Serve(lstn); err != nil {
 			srvErrCh <- err

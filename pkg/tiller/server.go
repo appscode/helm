@@ -44,20 +44,20 @@ import (
 var maxMsgSize = 1024 * 1024 * 10
 
 // DefaultServerOpts returns the set of default grpc ServerOption's that Tiller requires.
-func DefaultServerOpts(syscfg *rest.Config) []grpc.ServerOption {
+func DefaultServerOpts(sysCli *kube.Client) []grpc.ServerOption {
 	return []grpc.ServerOption{
 		grpc.MaxMsgSize(maxMsgSize),
-		grpc.UnaryInterceptor(newUnaryInterceptor(syscfg)),
-		grpc.StreamInterceptor(newStreamInterceptor(syscfg)),
+		grpc.UnaryInterceptor(newUnaryInterceptor(sysCli)),
+		grpc.StreamInterceptor(newStreamInterceptor(sysCli)),
 	}
 }
 
 // NewServer creates a new grpc server.
-func NewServer(syscfg *rest.Config, opts ...grpc.ServerOption) *grpc.Server {
-	return grpc.NewServer(append(DefaultServerOpts(syscfg), opts...)...)
+func NewServer(sysCli *kube.Client, opts ...grpc.ServerOption) *grpc.Server {
+	return grpc.NewServer(append(DefaultServerOpts(sysCli), opts...)...)
 }
 
-func authenticate(c ctx.Context, syscfg *rest.Config) (ctx.Context, error) {
+func authenticate(c ctx.Context, sysCli *kube.Client) (ctx.Context, error) {
 	md, ok := metadata.FromContext(c)
 	if !ok {
 		return nil, errors.New("Missing metadata in context.")
@@ -66,12 +66,12 @@ func authenticate(c ctx.Context, syscfg *rest.Config) (ctx.Context, error) {
 	var err error
 	authHeader, ok := md[string(kube.Authorization)]
 	if !ok || len(authHeader) == 0 || authHeader[0] == "" {
-		c, err = checkClientCert(c, syscfg)
+		c, err = checkClientCert(c, sysCli)
 	} else {
 		if strings.HasPrefix(authHeader[0], "Bearer ") {
-			c, err = checkBearerAuth(c, authHeader[0], syscfg)
+			c, err = checkBearerAuth(c, authHeader[0], sysCli)
 		} else if strings.HasPrefix(authHeader[0], "Basic ") {
-			c, err = checkBasicAuth(c, authHeader[0], syscfg)
+			c, err = checkBasicAuth(c, authHeader[0], sysCli)
 		} else {
 			return nil, errors.New("Unknown authorization scheme.")
 		}
@@ -79,7 +79,7 @@ func authenticate(c ctx.Context, syscfg *rest.Config) (ctx.Context, error) {
 	return c, err
 }
 
-func newUnaryInterceptor(syscfg *rest.Config) grpc.UnaryServerInterceptor {
+func newUnaryInterceptor(sysCli *kube.Client) grpc.UnaryServerInterceptor {
 	return func(ctx ctx.Context, req interface{}, info *grpc.UnaryServerInfo, handler grpc.UnaryHandler) (resp interface{}, err error) {
 		err = checkClientVersion(ctx)
 		if err != nil {
@@ -89,7 +89,7 @@ func newUnaryInterceptor(syscfg *rest.Config) grpc.UnaryServerInterceptor {
 				return nil, err
 			}
 		}
-		ctx, err = authenticate(ctx, syscfg)
+		ctx, err = authenticate(ctx, sysCli)
 		if err != nil {
 			log.Println(err)
 			return nil, err
@@ -98,7 +98,7 @@ func newUnaryInterceptor(syscfg *rest.Config) grpc.UnaryServerInterceptor {
 	}
 }
 
-func newStreamInterceptor(syscfg *rest.Config) grpc.StreamServerInterceptor {
+func newStreamInterceptor(sysCli *kube.Client) grpc.StreamServerInterceptor {
 	return func(srv interface{}, ss grpc.ServerStream, info *grpc.StreamServerInfo, handler grpc.StreamHandler) error {
 		ctx := ss.Context()
 		err := checkClientVersion(ctx)
@@ -106,7 +106,7 @@ func newStreamInterceptor(syscfg *rest.Config) grpc.StreamServerInterceptor {
 			log.Println(err)
 			return err
 		}
-		ctx, err = authenticate(ctx, syscfg)
+		ctx, err = authenticate(ctx, sysCli)
 		if err != nil {
 			log.Println(err)
 			return err
@@ -158,11 +158,10 @@ func checkClientVersion(ctx ctx.Context) error {
 	return nil
 }
 
-func checkBearerAuth(c ctx.Context, h string, syscfg *rest.Config) (ctx.Context, error) {
+func checkBearerAuth(c ctx.Context, h string, sysCli *kube.Client) (ctx.Context, error) {
 	token := h[len("Bearer "):]
 
-	sysClient := kube.New(&wrapClientConfig{cfg: syscfg})
-	clientset, err := sysClient.ClientSet()
+	clientset, err := sysCli.ClientSet()
 	if err != nil {
 		return c, err
 	}
@@ -181,6 +180,10 @@ func checkBearerAuth(c ctx.Context, h string, syscfg *rest.Config) (ctx.Context,
 		return c, errors.New("Not authenticated")
 	}
 
+	syscfg, err := sysCli.ClientConfig()
+	if err != nil {
+		return c, err
+	}
 	usrcfg := &rest.Config{
 		Host:        syscfg.Host,
 		APIPath:     syscfg.APIPath,
@@ -191,11 +194,11 @@ func checkBearerAuth(c ctx.Context, h string, syscfg *rest.Config) (ctx.Context,
 
 	c = ctx.WithValue(c, kube.UserInfo, &result.Status.User)
 	c = ctx.WithValue(c, kube.UserClient, kube.New(&wrapClientConfig{cfg: usrcfg}))
-	c = ctx.WithValue(c, kube.SystemClient, sysClient)
+	c = ctx.WithValue(c, kube.SystemClient, sysCli)
 	return c, nil
 }
 
-func checkBasicAuth(c ctx.Context, h string, syscfg *rest.Config) (ctx.Context, error) {
+func checkBasicAuth(c ctx.Context, h string, sysCli *kube.Client) (ctx.Context, error) {
 	basicAuth, err := base64.StdEncoding.DecodeString(h[len("Basic "):])
 	if err != nil {
 		return c, err
@@ -205,6 +208,10 @@ func checkBasicAuth(c ctx.Context, h string, syscfg *rest.Config) (ctx.Context, 
 		return c, errors.New("Missing username or password.")
 	}
 
+	syscfg, err := sysCli.ClientConfig()
+	if err != nil {
+		return c, err
+	}
 	usrcfg := &rest.Config{
 		Host:     syscfg.Host,
 		APIPath:  syscfg.APIPath,
@@ -230,7 +237,7 @@ func checkBasicAuth(c ctx.Context, h string, syscfg *rest.Config) (ctx.Context, 
 		Username: username,
 	})
 	c = ctx.WithValue(c, kube.UserClient, usrClient)
-	c = ctx.WithValue(c, kube.SystemClient, kube.New(&wrapClientConfig{cfg: syscfg}))
+	c = ctx.WithValue(c, kube.SystemClient, sysCli)
 	return c, nil
 }
 
@@ -242,7 +249,7 @@ func getUserPasswordFromBasicAuth(token string) (string, string) {
 	return "", ""
 }
 
-func checkClientCert(c ctx.Context, syscfg *rest.Config) (ctx.Context, error) {
+func checkClientCert(c ctx.Context, sysCli *kube.Client) (ctx.Context, error) {
 	// ref: https://github.com/grpc/grpc-go/issues/111#issuecomment-275820771
 	peer, ok := peer.FromContext(c)
 	if !ok {
@@ -260,12 +267,16 @@ func checkClientCert(c ctx.Context, syscfg *rest.Config) (ctx.Context, error) {
 	user := authenticationapi.UserInfo{
 		Username: crt.Subject.CommonName,
 	}
+	syscfg, err := sysCli.ClientConfig()
+	if err != nil {
+		return c, err
+	}
 	usrcfg := *syscfg
 	usrcfg.Impersonate = crt.Subject.CommonName
 
 	c = ctx.WithValue(c, kube.UserInfo, &user)
 	c = ctx.WithValue(c, kube.UserClient, kube.New(&wrapClientConfig{cfg: &usrcfg}))
-	c = ctx.WithValue(c, kube.SystemClient, kube.New(&wrapClientConfig{cfg: syscfg}))
+	c = ctx.WithValue(c, kube.SystemClient, sysCli)
 	c = ctx.WithValue(c, kube.ImpersonateUser, struct{}{})
 	return c, nil
 }
