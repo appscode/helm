@@ -271,8 +271,8 @@ func getKubeClient(context string) (*restclient.Config, *internalclientset.Clien
 func loadAuthHeaders(ctx context.Context) context.Context {
 	c, err := kube.GetConfig(kubeContext).ClientConfig()
 	if err != nil {
-		log.Println("Failed to extract authentication headers")
-		return ctx
+		fmt.Fprintf(os.Stderr, "Failed to extract authentication headers: %s\n", err)
+		os.Exit(1)
 	}
 
 	if c.AuthProvider != nil {
@@ -282,7 +282,8 @@ func loadAuthHeaders(ctx context.Context) context.Context {
 		case "oidc":
 			ctx = context.WithValue(ctx, kube.Authorization, "Bearer "+c.AuthProvider.Config["id-token"])
 		default:
-			panic("Unknown auth provider: " + c.AuthProvider.Name)
+			fmt.Fprintf(os.Stderr, "Unknown auth provider: %s\n", c.AuthProvider.Name)
+			os.Exit(1)
 		}
 	}
 
