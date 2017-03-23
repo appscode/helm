@@ -153,7 +153,7 @@ func start(c *cobra.Command, args []string) {
 		opts = append(opts, grpc.Creds(credentials.NewTLS(cfg)))
 	}
 
-	rootServer = tiller.NewServer(clientset, opts...)
+	rootServer = tiller.NewServer(client, opts...)
 
 	lstn, err := net.Listen("tcp", grpcAddr)
 	if err != nil {

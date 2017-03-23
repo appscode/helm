@@ -17,11 +17,7 @@ limitations under the License.
 package helm
 
 import (
-	"bytes"
 	"crypto/tls"
-	"encoding/base64"
-	"io/ioutil"
-	"log"
 
 	"github.com/golang/protobuf/proto"
 	"golang.org/x/net/context"
@@ -95,6 +91,7 @@ func WithTLS(cfg *tls.Config) Option {
 	return func(opts *options) {
 		opts.useTLS = true
 		opts.tlsConfig = cfg
+	}
 }
 
 // WithContext returns an option that allows adding metadata to context of a helm client rpc
