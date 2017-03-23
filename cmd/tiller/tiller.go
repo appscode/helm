@@ -173,7 +173,7 @@ func start(c *cobra.Command, args []string) {
 	srvErrCh := make(chan error)
 	probeErrCh := make(chan error)
 	go func() {
-		svc := tiller.NewReleaseServer(env)
+		svc := tiller.NewReleaseServer(env, clientset)
 		services.RegisterReleaseServiceServer(rootServer, svc)
 		if err := rootServer.Serve(lstn); err != nil {
 			srvErrCh <- err

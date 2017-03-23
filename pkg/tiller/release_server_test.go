@@ -27,12 +27,11 @@ import (
 
 	"github.com/golang/protobuf/ptypes/timestamp"
 	"golang.org/x/net/context"
-	"google.golang.org/grpc"
+	grpc "google.golang.org/grpc"
 	"google.golang.org/grpc/metadata"
 	"k8s.io/kubernetes/pkg/client/clientset_generated/internalclientset/fake"
 
 	"k8s.io/helm/pkg/helm"
-	"k8s.io/helm/pkg/kube"
 	"k8s.io/helm/pkg/proto/hapi/chart"
 	"k8s.io/helm/pkg/proto/hapi/release"
 	"k8s.io/helm/pkg/proto/hapi/services"
@@ -99,7 +98,8 @@ data:
 
 func rsFixture() *ReleaseServer {
 	return &ReleaseServer{
-		env: MockEnvironment(),
+		env:       MockEnvironment(),
+		clientset: fake.NewSimpleClientset(),
 	}
 }
 
@@ -204,7 +204,8 @@ func TestValidName(t *testing.T) {
 }
 
 func TestGetVersionSet(t *testing.T) {
-	vs, err := getVersionSet(fake.NewSimpleClientset().Discovery())
+	rs := rsFixture()
+	vs, err := getVersionSet(rs.clientset.Discovery())
 	if err != nil {
 		t.Error(err)
 	}
@@ -261,10 +262,7 @@ func TestUniqName(t *testing.T) {
 }
 
 func TestInstallRelease(t *testing.T) {
-	kc := &environment.PrintingKubeClient{Out: os.Stdout, Clientset: fake.NewSimpleClientset()}
 	c := helm.NewContext()
-	c = context.WithValue(c, kube.UserClient, kc)
-	c = context.WithValue(c, kube.SystemClient, kc)
 	rs := rsFixture()
 
 	// TODO: Refactor this into a mock.
@@ -328,10 +326,7 @@ func TestInstallRelease(t *testing.T) {
 }
 
 func TestInstallReleaseWithNotes(t *testing.T) {
-	kc := &environment.PrintingKubeClient{Out: os.Stdout, Clientset: fake.NewSimpleClientset()}
 	c := helm.NewContext()
-	c = context.WithValue(c, kube.UserClient, kc)
-	c = context.WithValue(c, kube.SystemClient, kc)
 	rs := rsFixture()
 
 	// TODO: Refactor this into a mock.
@@ -400,10 +395,7 @@ func TestInstallReleaseWithNotes(t *testing.T) {
 }
 
 func TestInstallReleaseWithNotesRendered(t *testing.T) {
-	kc := &environment.PrintingKubeClient{Out: os.Stdout, Clientset: fake.NewSimpleClientset()}
 	c := helm.NewContext()
-	c = context.WithValue(c, kube.UserClient, kc)
-	c = context.WithValue(c, kube.SystemClient, kc)
 	rs := rsFixture()
 
 	// TODO: Refactor this into a mock.
@@ -473,10 +465,7 @@ func TestInstallReleaseWithNotesRendered(t *testing.T) {
 }
 
 func TestInstallReleaseWithChartAndDependencyNotes(t *testing.T) {
-	kc := &environment.PrintingKubeClient{Out: os.Stdout, Clientset: fake.NewSimpleClientset()}
 	c := helm.NewContext()
-	c = context.WithValue(c, kube.UserClient, kc)
-	c = context.WithValue(c, kube.SystemClient, kc)
 	rs := rsFixture()
 
 	// TODO: Refactor this into a mock.
@@ -527,10 +516,7 @@ func TestInstallReleaseWithChartAndDependencyNotes(t *testing.T) {
 }
 
 func TestInstallReleaseDryRun(t *testing.T) {
-	kc := &environment.PrintingKubeClient{Out: os.Stdout, Clientset: fake.NewSimpleClientset()}
 	c := helm.NewContext()
-	c = context.WithValue(c, kube.UserClient, kc)
-	c = context.WithValue(c, kube.SystemClient, kc)
 	rs := rsFixture()
 
 	req := &services.InstallReleaseRequest{
@@ -583,10 +569,7 @@ func TestInstallReleaseDryRun(t *testing.T) {
 }
 
 func TestInstallReleaseNoHooks(t *testing.T) {
-	kc := &environment.PrintingKubeClient{Out: os.Stdout, Clientset: fake.NewSimpleClientset()}
 	c := helm.NewContext()
-	c = context.WithValue(c, kube.UserClient, kc)
-	c = context.WithValue(c, kube.SystemClient, kc)
 	rs := rsFixture()
 	rs.env.Releases.Create(releaseStub())
 
@@ -606,10 +589,9 @@ func TestInstallReleaseNoHooks(t *testing.T) {
 
 func TestInstallReleaseFailedHooks(t *testing.T) {
 	c := helm.NewContext()
-	c = context.WithValue(c, kube.UserClient, newHookFailingKubeClient())
-	c = context.WithValue(c, kube.SystemClient, newHookFailingKubeClient())
 	rs := rsFixture()
 	rs.env.Releases.Create(releaseStub())
+	rs.env.KubeClient = newHookFailingKubeClient()
 
 	req := &services.InstallReleaseRequest{
 		Chart: chartStub(),
@@ -625,10 +607,7 @@ func TestInstallReleaseFailedHooks(t *testing.T) {
 }
 
 func TestInstallReleaseReuseName(t *testing.T) {
-	kc := &environment.PrintingKubeClient{Out: os.Stdout, Clientset: fake.NewSimpleClientset()}
 	c := helm.NewContext()
-	c = context.WithValue(c, kube.UserClient, kc)
-	c = context.WithValue(c, kube.SystemClient, kc)
 	rs := rsFixture()
 	rel := releaseStub()
 	rel.Info.Status.Code = release.Status_DELETED
@@ -659,10 +638,7 @@ func TestInstallReleaseReuseName(t *testing.T) {
 }
 
 func TestUpdateRelease(t *testing.T) {
-	kc := &environment.PrintingKubeClient{Out: os.Stdout, Clientset: fake.NewSimpleClientset()}
 	c := helm.NewContext()
-	c = context.WithValue(c, kube.UserClient, kc)
-	c = context.WithValue(c, kube.SystemClient, kc)
 	rs := rsFixture()
 	rel := releaseStub()
 	rs.env.Releases.Create(rel)
@@ -742,10 +718,7 @@ func TestUpdateRelease(t *testing.T) {
 	}
 }
 func TestUpdateRelease_ResetValues(t *testing.T) {
-	kc := &environment.PrintingKubeClient{Out: os.Stdout, Clientset: fake.NewSimpleClientset()}
 	c := helm.NewContext()
-	c = context.WithValue(c, kube.UserClient, kc)
-	c = context.WithValue(c, kube.SystemClient, kc)
 	rs := rsFixture()
 	rel := releaseStub()
 	rs.env.Releases.Create(rel)
@@ -838,12 +811,10 @@ func TestUpdateRelease_ResetReuseValues(t *testing.T) {
 
 func TestUpdateReleaseFailure(t *testing.T) {
 	c := helm.NewContext()
-	c = context.WithValue(c, kube.UserClient, newUpdateFailingKubeClient())
-	c = context.WithValue(c, kube.SystemClient, newUpdateFailingKubeClient())
-
 	rs := rsFixture()
 	rel := releaseStub()
 	rs.env.Releases.Create(rel)
+	rs.env.KubeClient = newUpdateFailingKubeClient()
 
 	req := &services.UpdateReleaseRequest{
 		Name:         rel.Name,
@@ -881,9 +852,6 @@ func TestUpdateReleaseFailure(t *testing.T) {
 
 func TestRollbackReleaseFailure(t *testing.T) {
 	c := helm.NewContext()
-	c = context.WithValue(c, kube.UserClient, newUpdateFailingKubeClient())
-	c = context.WithValue(c, kube.SystemClient, newUpdateFailingKubeClient())
-
 	rs := rsFixture()
 	rel := releaseStub()
 	rs.env.Releases.Create(rel)
@@ -896,6 +864,7 @@ func TestRollbackReleaseFailure(t *testing.T) {
 		DisableHooks: true,
 	}
 
+	rs.env.KubeClient = newUpdateFailingKubeClient()
 	res, err := rs.RollbackRelease(c, req)
 	if err == nil {
 		t.Error("Expected failed rollback")
@@ -915,10 +884,7 @@ func TestRollbackReleaseFailure(t *testing.T) {
 }
 
 func TestUpdateReleaseNoHooks(t *testing.T) {
-	kc := &environment.PrintingKubeClient{Out: os.Stdout, Clientset: fake.NewSimpleClientset()}
 	c := helm.NewContext()
-	c = context.WithValue(c, kube.UserClient, kc)
-	c = context.WithValue(c, kube.SystemClient, kc)
 	rs := rsFixture()
 	rel := releaseStub()
 	rs.env.Releases.Create(rel)
@@ -947,10 +913,7 @@ func TestUpdateReleaseNoHooks(t *testing.T) {
 }
 
 func TestUpdateReleaseNoChanges(t *testing.T) {
-	kc := &environment.PrintingKubeClient{Out: os.Stdout, Clientset: fake.NewSimpleClientset()}
 	c := helm.NewContext()
-	c = context.WithValue(c, kube.UserClient, kc)
-	c = context.WithValue(c, kube.SystemClient, kc)
 	rs := rsFixture()
 	rel := releaseStub()
 	rs.env.Releases.Create(rel)
@@ -968,10 +931,7 @@ func TestUpdateReleaseNoChanges(t *testing.T) {
 }
 
 func TestRollbackReleaseNoHooks(t *testing.T) {
-	kc := &environment.PrintingKubeClient{Out: os.Stdout, Clientset: fake.NewSimpleClientset()}
 	c := helm.NewContext()
-	c = context.WithValue(c, kube.UserClient, kc)
-	c = context.WithValue(c, kube.SystemClient, kc)
 	rs := rsFixture()
 	rel := releaseStub()
 	rel.Hooks = []*release.Hook{
@@ -1007,10 +967,7 @@ func TestRollbackReleaseNoHooks(t *testing.T) {
 }
 
 func TestRollbackWithReleaseVersion(t *testing.T) {
-	kc := &environment.PrintingKubeClient{Out: os.Stdout, Clientset: fake.NewSimpleClientset()}
 	c := helm.NewContext()
-	c = context.WithValue(c, kube.UserClient, kc)
-	c = context.WithValue(c, kube.SystemClient, kc)
 	rs := rsFixture()
 	rel := releaseStub()
 	rs.env.Releases.Create(rel)
@@ -1031,10 +988,7 @@ func TestRollbackWithReleaseVersion(t *testing.T) {
 }
 
 func TestRollbackRelease(t *testing.T) {
-	kc := &environment.PrintingKubeClient{Out: os.Stdout, Clientset: fake.NewSimpleClientset()}
 	c := helm.NewContext()
-	c = context.WithValue(c, kube.UserClient, kc)
-	c = context.WithValue(c, kube.SystemClient, kc)
 	rs := rsFixture()
 	rel := releaseStub()
 	rs.env.Releases.Create(rel)
@@ -1146,10 +1100,7 @@ func TestRollbackRelease(t *testing.T) {
 }
 
 func TestUninstallRelease(t *testing.T) {
-	kc := &environment.PrintingKubeClient{Out: os.Stdout, Clientset: fake.NewSimpleClientset()}
 	c := helm.NewContext()
-	c = context.WithValue(c, kube.UserClient, kc)
-	c = context.WithValue(c, kube.SystemClient, kc)
 	rs := rsFixture()
 	rs.env.Releases.Create(releaseStub())
 
@@ -1184,10 +1135,7 @@ func TestUninstallRelease(t *testing.T) {
 }
 
 func TestUninstallPurgeRelease(t *testing.T) {
-	kc := &environment.PrintingKubeClient{Out: os.Stdout, Clientset: fake.NewSimpleClientset()}
 	c := helm.NewContext()
-	c = context.WithValue(c, kube.UserClient, kc)
-	c = context.WithValue(c, kube.SystemClient, kc)
 	rs := rsFixture()
 	rel := releaseStub()
 	rs.env.Releases.Create(rel)
@@ -1226,10 +1174,7 @@ func TestUninstallPurgeRelease(t *testing.T) {
 }
 
 func TestUninstallPurgeDeleteRelease(t *testing.T) {
-	kc := &environment.PrintingKubeClient{Out: os.Stdout, Clientset: fake.NewSimpleClientset()}
 	c := helm.NewContext()
-	c = context.WithValue(c, kube.UserClient, kc)
-	c = context.WithValue(c, kube.SystemClient, kc)
 	rs := rsFixture()
 	rs.env.Releases.Create(releaseStub())
 
@@ -1254,10 +1199,7 @@ func TestUninstallPurgeDeleteRelease(t *testing.T) {
 }
 
 func TestUninstallReleaseWithKeepPolicy(t *testing.T) {
-	kc := &environment.PrintingKubeClient{Out: os.Stdout, Clientset: fake.NewSimpleClientset()}
 	c := helm.NewContext()
-	c = context.WithValue(c, kube.UserClient, kc)
-	c = context.WithValue(c, kube.SystemClient, kc)
 	rs := rsFixture()
 	name := "angry-bunny"
 	rs.env.Releases.Create(releaseWithKeepStub(name))
@@ -1314,10 +1256,7 @@ func releaseWithKeepStub(rlsName string) *release.Release {
 }
 
 func TestUninstallReleaseNoHooks(t *testing.T) {
-	kc := &environment.PrintingKubeClient{Out: os.Stdout, Clientset: fake.NewSimpleClientset()}
 	c := helm.NewContext()
-	c = context.WithValue(c, kube.UserClient, kc)
-	c = context.WithValue(c, kube.SystemClient, kc)
 	rs := rsFixture()
 	rs.env.Releases.Create(releaseStub())
 
@@ -1356,10 +1295,7 @@ func TestGetReleaseContent(t *testing.T) {
 }
 
 func TestGetReleaseStatus(t *testing.T) {
-	kc := &environment.PrintingKubeClient{Out: os.Stdout, Clientset: fake.NewSimpleClientset()}
 	c := helm.NewContext()
-	c = context.WithValue(c, kube.UserClient, kc)
-	c = context.WithValue(c, kube.SystemClient, kc)
 	rs := rsFixture()
 	rel := releaseStub()
 	if err := rs.env.Releases.Create(rel); err != nil {
@@ -1380,10 +1316,7 @@ func TestGetReleaseStatus(t *testing.T) {
 }
 
 func TestGetReleaseStatusDeleted(t *testing.T) {
-	kc := &environment.PrintingKubeClient{Out: os.Stdout, Clientset: fake.NewSimpleClientset()}
 	c := helm.NewContext()
-	c = context.WithValue(c, kube.UserClient, kc)
-	c = context.WithValue(c, kube.SystemClient, kc)
 	rs := rsFixture()
 	rel := releaseStub()
 	rel.Info.Status.Code = release.Status_DELETED
@@ -1624,12 +1557,13 @@ func TestRunReleaseTest(t *testing.T) {
 func MockEnvironment() *environment.Environment {
 	e := environment.New()
 	e.Releases = storage.Init(driver.NewMemory())
+	e.KubeClient = &environment.PrintingKubeClient{Out: os.Stdout}
 	return e
 }
 
 func newUpdateFailingKubeClient() *updateFailingKubeClient {
 	return &updateFailingKubeClient{
-		PrintingKubeClient: environment.PrintingKubeClient{Out: os.Stdout, Clientset: fake.NewSimpleClientset()},
+		PrintingKubeClient: environment.PrintingKubeClient{Out: os.Stdout},
 	}
 
 }
@@ -1644,7 +1578,7 @@ func (u *updateFailingKubeClient) Update(namespace string, originalReader, modif
 
 func newHookFailingKubeClient() *hookFailingKubeClient {
 	return &hookFailingKubeClient{
-		PrintingKubeClient: environment.PrintingKubeClient{Out: os.Stdout, Clientset: fake.NewSimpleClientset()},
+		PrintingKubeClient: environment.PrintingKubeClient{Out: os.Stdout},
 	}
 }
 
@@ -1684,10 +1618,4 @@ func (rs mockRunReleaseTestServer) SendHeader(m metadata.MD) error { return nil 
 func (rs mockRunReleaseTestServer) SetTrailer(m metadata.MD)       {}
 func (rs mockRunReleaseTestServer) SendMsg(v interface{}) error    { return nil }
 func (rs mockRunReleaseTestServer) RecvMsg(v interface{}) error    { return nil }
-func (rs mockRunReleaseTestServer) Context() context.Context {
-	kc := &environment.PrintingKubeClient{Out: os.Stdout, Clientset: fake.NewSimpleClientset()}
-	c := helm.NewContext()
-	c = context.WithValue(c, kube.UserClient, kc)
-	c = context.WithValue(c, kube.SystemClient, kc)
-	return c
-}
+func (rs mockRunReleaseTestServer) Context() context.Context       { return helm.NewContext() }
