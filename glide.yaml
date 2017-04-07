@@ -76,3 +76,5 @@ import:
 - package: github.com/grpc-ecosystem/grpc-gateway
   repo: https://github.com/appscode/grpc-gateway.git
   version: master
+- package: github.com/prometheus/client_golang
+  version: v0.8.0
