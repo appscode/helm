@@ -27,6 +27,7 @@ import (
 	"path/filepath"
 	"strings"
 
+	goprom "github.com/grpc-ecosystem/go-grpc-prometheus"
 	"github.com/grpc-ecosystem/grpc-gateway/runtime"
 	"github.com/spf13/cobra"
 	"golang.org/x/net/context"
@@ -224,6 +225,11 @@ func start(c *cobra.Command, args []string) {
 
 	go func() {
 		mux := newProbesMux()
+
+		// Register gRPC server to prometheus to initialized matrix
+		goprom.Register(rootServer)
+		addPrometheusHandler(mux)
+
 		if err := http.ListenAndServe(probeAddr, mux); err != nil {
 			probeErrCh <- err
 		}
