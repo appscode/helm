@@ -168,7 +168,7 @@ imports:
   - util/strutil
   - util/wordwrap
 - name: github.com/grpc-ecosystem/grpc-gateway
-  version: 0105e1c52e9b941244cf1840be2dad9c971fa534
+  version: 0e676c3b0e4440ef1434c621068aae02f30e81dd
   repo: https://github.com/appscode/grpc-gateway.git
   subpackages:
   - runtime
