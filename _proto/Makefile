@@ -40,6 +40,7 @@ release:
 services:
 	PATH=../bin:$(PATH) protoc -I . -I $(googleapis_dir) --$(target)_out=plugins=$(plugins),$(google_deps),$(chart_ias),$(version_ias),$(release_ias):$(dst) $(services_pbs)
 	PATH=../bin:$(PATH) protoc -I . -I $(googleapis_dir) --grpc-gateway_out=logtostderr=true,$(google_deps),$(chart_ias),$(version_ias),$(release_ias):$(dst) $(services_pbs)
+	PATH=../bin:$(PATH) protoc -I . -I $(googleapis_dir) --grpc-js-client_out=logtostderr=true,$(google_deps),$(chart_ias),$(version_ias),$(release_ias):$(dst) $(services_pbs)
 
 version:
 	PATH=../bin:$(PATH) protoc -I . -I $(googleapis_dir) --$(target)_out=plugins=$(plugins),$(google_deps):$(dst) $(version_pbs)
