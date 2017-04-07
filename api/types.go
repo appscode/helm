@@ -1,0 +1,71 @@
+/*
+Copyright 2017 AppsCode Inc. All rights reserved.
+Licensed under the Apache License, Version 2.0 (the "License");
+you may not use this file except in compliance with the License.
+You may obtain a copy of the License at
+
+http://www.apache.org/licenses/LICENSE-2.0
+
+Unless required by applicable law or agreed to in writing, software
+distributed under the License is distributed on an "AS IS" BASIS,
+WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+See the License for the specific language governing permissions and
+limitations under the License.
+*/
+
+package api
+
+import (
+	hapi_chart "k8s.io/helm/pkg/proto/hapi/chart"
+	"k8s.io/kubernetes/pkg/api"
+	"k8s.io/kubernetes/pkg/api/unversioned"
+)
+
+// Release captures the state of a individual release and are immutable.
+// Release replaces the version wise configmaps used by Tiller 2.0
+type Release struct {
+	unversioned.TypeMeta `json:",inline,omitempty"`
+	api.ObjectMeta       `json:"metadata,omitempty"`
+	Spec                 ReleaseSpec   `json:"spec,omitempty"`
+	Status               ReleaseStatus `json:"status,omitempty"`
+}
+
+type ReleaseSpec struct {
+	// Description is human-friendly "log entry" about this release.
+	Description string `json:"Description,omitempty"`
+	// Chart is the chart that was released.
+	ChartMetadata *hapi_chart.Metadata `json:"chartMetadata,omitempty"`
+	// Config is the set of extra Values added to the chart.
+	// These values override the default values inside of the chart.
+	Config map[string]string `json:"config,omitempty"`
+	// Version is an int32 which represents the version of the release.
+	Version int32 `json:"version,omitempty"`
+
+	// TODO(tamal): Store in proper namespace
+	// Namespace is the kubernetes namespace of the release.
+	// Namespace string `json:"namespace,omitempty"`
+
+	// The ChartSource represents the location and type of a chart to install.
+	// This is modelled like Volume in Pods, which allows specifying a chart
+	// inline (like today) or pulling a chart object from a (potentially private)
+	// chart registry similar to pulling a Docker image.
+	Data string `json:"data,omitempty"`
+}
+
+type ReleaseStatus struct {
+	Code string `json:"code,omitempty"`
+	// Cluster resources as kubectl would print them.
+	Resources string `json:"resources,omitempty"`
+	// Contains the rendered templates/NOTES.txt if available
+	Notes         string            `json:"notes,omitempty"`
+	FirstDeployed *unversioned.Time `json:"first_deployed,omitempty"`
+	LastDeployed  *unversioned.Time `json:"last_deployed,omitempty"`
+	// Deleted tracks when this object was deleted.
+	Deleted *unversioned.Time `json:"deleted,omitempty"`
+}
+
+type ReleaseList struct {
+	unversioned.TypeMeta `json:",inline"`
+	unversioned.ListMeta `json:"metadata,omitempty"`
+	Items                []Release `json:"items,omitempty"`
+}
