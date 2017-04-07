@@ -1,5 +1,5 @@
-hash: c225c75fb99938fd018a7997967482b538ff9cd2aa57e82458645eb233367a7d
-updated: 2017-04-07T13:41:40.790784678-07:00
+hash: 10020c7ea9f910dce5145191a2ceef4eb24a7ac360533235a97c4774c4348f7d
+updated: 2017-04-07T16:08:05.335141942-07:00
 imports:
 - name: bitbucket.org/ww/goautoneg
   version: 75cd24fc2f2c2a2088577d12123ddee5f54e0675
@@ -12,6 +12,39 @@ imports:
   version: 5e8cbdfe987ad788b91aceb88ce79545bc12b1f0
 - name: github.com/asaskevich/govalidator
   version: 7664702784775e51966f0885f5cd27435916517b
+- name: github.com/aws/aws-sdk-go
+  version: 819b71cf8430e434c1eee7e7e8b0f2b8870be899
+  subpackages:
+  - aws
+  - aws/awserr
+  - aws/awsutil
+  - aws/client
+  - aws/client/metadata
+  - aws/corehandlers
+  - aws/credentials
+  - aws/credentials/ec2rolecreds
+  - aws/credentials/endpointcreds
+  - aws/credentials/stscreds
+  - aws/defaults
+  - aws/ec2metadata
+  - aws/endpoints
+  - aws/request
+  - aws/session
+  - aws/signer/v4
+  - private/protocol
+  - private/protocol/query
+  - private/protocol/query/queryutil
+  - private/protocol/rest
+  - private/protocol/restxml
+  - private/protocol/xml/xmlutil
+  - private/waiter
+  - service/s3
+  - service/sts
+- name: github.com/Azure/azure-sdk-for-go
+  version: 0984e0641ae43b89283223034574d6465be93bf4
+  vcs: git
+  subpackages:
+  - storage
 - name: github.com/Azure/go-ansiterm
   version: 70b2c90b260171e829f1ebd7c17f600c11858dbe
   subpackages:
@@ -39,7 +72,7 @@ imports:
   - httputil
   - timeutil
 - name: github.com/cpuguy83/go-md2man
-  version: a65d4d2de4d5f7c74868dfa9b202a3c8be315aaa
+  version: 71acacd42f85e5e82f70a55327789582a5200a90
   subpackages:
   - md2man
 - name: github.com/davecgh/go-spew
@@ -106,6 +139,8 @@ imports:
   version: 42004b9f322246749dd73ad71008b1f3160c0052
 - name: github.com/ghodss/yaml
   version: 73d445a93680fa1a78ae23a5839bad48f32ba1ee
+- name: github.com/go-ini/ini
+  version: 2e44421e256d82ebbf3d4d4fcabe8930b905eff3
 - name: github.com/go-openapi/jsonpointer
   version: 46af16f9f7b149af66e5d1bd010e3574dc06de98
 - name: github.com/go-openapi/jsonreference
@@ -173,6 +208,15 @@ imports:
   subpackages:
   - util/strutil
   - util/wordwrap
+- name: github.com/graymeta/stow
+  version: d4b253dd4995360ae103b6460bbadeaa7fb3cdb4
+  repo: https://github.com/appscode/stow.git
+  vcs: git
+  subpackages:
+  - azure
+  - google
+  - s3
+  - swift
 - name: github.com/grpc-ecosystem/go-grpc-prometheus
   version: 6b7015e65d366bf3f19b2b2a000a831940f0f7e0
 - name: github.com/grpc-ecosystem/grpc-gateway
@@ -188,6 +232,8 @@ imports:
   version: 6633656539c1639d9d78127b7d47c622b5d7b6dc
 - name: github.com/inconshreveable/mousetrap
   version: 76626ae9c91c4f2a10f34cad8ce83ea42c93bb75
+- name: github.com/jmespath/go-jmespath
+  version: 3433f3ea46d9f8019119e7dd41274e112a2359a9
 - name: github.com/jonboulle/clockwork
   version: 72f9bd7c4e0c2a40055ab3d0f09654f730cce982
 - name: github.com/juju/ratelimit
@@ -218,8 +264,12 @@ imports:
   version: 751171607256bb66e64c9f0220c00662420c38e9
   subpackages:
   - ast
+- name: github.com/ncw/swift
+  version: 8e9b10220613abdbc2896808ee6b43e411a4fa6c
 - name: github.com/pborman/uuid
   version: ca53cad383cad2479bbba7f7a1a05797ec1386e4
+- name: github.com/pkg/errors
+  version: a22138067af1c4942683050411a841ade67fe1eb
 - name: github.com/prometheus/client_golang
   version: c5b7fccd204277076155f10851dad72b76a49317
   subpackages:
@@ -311,6 +361,13 @@ imports:
   - unicode/bidi
   - unicode/norm
   - width
+- name: google.golang.org/api
+  version: 16ab375f94503bfa0d19db78e96bffbe1a34354f
+  subpackages:
+  - gensupport
+  - googleapi
+  - googleapi/internal/uritemplates
+  - storage/v1
 - name: google.golang.org/appengine
   version: 4f7eeb5305a4ba1966344836ba4af9996b7b4e05
   subpackages:
@@ -344,7 +401,7 @@ imports:
 - name: gopkg.in/inf.v0
   version: 3887ee99ecf07df5b447e9b00d9c0b2adaa9f3e4
 - name: gopkg.in/yaml.v2
-  version: cd8b52f8269e0feb286dfeef29f8fe4d5b397e0b
+  version: 53feefa2559fb8dfa8d81baad31be332c97d6c77
 - name: k8s.io/kubernetes
   version: 114f8911f9597be669a747ab72787e0bd74c9359
   subpackages:
@@ -447,6 +504,32 @@ imports:
   - pkg/client/clientset_generated/internalclientset/typed/rbac/internalversion/fake
   - pkg/client/clientset_generated/internalclientset/typed/storage/internalversion
   - pkg/client/clientset_generated/internalclientset/typed/storage/internalversion/fake
+  - pkg/client/clientset_generated/release_1_5
+  - pkg/client/clientset_generated/release_1_5/fake
+  - pkg/client/clientset_generated/release_1_5/typed/apps/v1beta1
+  - pkg/client/clientset_generated/release_1_5/typed/apps/v1beta1/fake
+  - pkg/client/clientset_generated/release_1_5/typed/authentication/v1beta1
+  - pkg/client/clientset_generated/release_1_5/typed/authentication/v1beta1/fake
+  - pkg/client/clientset_generated/release_1_5/typed/authorization/v1beta1
+  - pkg/client/clientset_generated/release_1_5/typed/authorization/v1beta1/fake
+  - pkg/client/clientset_generated/release_1_5/typed/autoscaling/v1
+  - pkg/client/clientset_generated/release_1_5/typed/autoscaling/v1/fake
+  - pkg/client/clientset_generated/release_1_5/typed/batch/v1
+  - pkg/client/clientset_generated/release_1_5/typed/batch/v1/fake
+  - pkg/client/clientset_generated/release_1_5/typed/batch/v2alpha1
+  - pkg/client/clientset_generated/release_1_5/typed/batch/v2alpha1/fake
+  - pkg/client/clientset_generated/release_1_5/typed/certificates/v1alpha1
+  - pkg/client/clientset_generated/release_1_5/typed/certificates/v1alpha1/fake
+  - pkg/client/clientset_generated/release_1_5/typed/core/v1
+  - pkg/client/clientset_generated/release_1_5/typed/core/v1/fake
+  - pkg/client/clientset_generated/release_1_5/typed/extensions/v1beta1
+  - pkg/client/clientset_generated/release_1_5/typed/extensions/v1beta1/fake
+  - pkg/client/clientset_generated/release_1_5/typed/policy/v1beta1
+  - pkg/client/clientset_generated/release_1_5/typed/policy/v1beta1/fake
+  - pkg/client/clientset_generated/release_1_5/typed/rbac/v1alpha1
+  - pkg/client/clientset_generated/release_1_5/typed/rbac/v1alpha1/fake
+  - pkg/client/clientset_generated/release_1_5/typed/storage/v1beta1
+  - pkg/client/clientset_generated/release_1_5/typed/storage/v1beta1/fake
   - pkg/client/metrics
   - pkg/client/record
   - pkg/client/restclient
