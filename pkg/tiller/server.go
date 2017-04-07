@@ -25,6 +25,7 @@ import (
 	"os"
 	"strings"
 
+	goprom "github.com/grpc-ecosystem/go-grpc-prometheus"
 	"golang.org/x/net/context"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials"
@@ -95,7 +96,7 @@ func newUnaryInterceptor(sysCli *kube.Client) grpc.UnaryServerInterceptor {
 			log.Println(err)
 			return nil, err
 		}
-		return handler(ctx, req)
+		return goprom.UnaryServerInterceptor(ctx, req, info, handler)
 	}
 }
 
@@ -117,7 +118,7 @@ func newStreamInterceptor(sysCli *kube.Client) grpc.StreamServerInterceptor {
 			ss:  ss,
 			ctx: ctx,
 		}
-		return handler(srv, newStream)
+		return goprom.StreamServerInterceptor(srv, newStream, info, handler)
 	}
 }
 
