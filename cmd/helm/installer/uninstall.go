@@ -20,7 +20,6 @@ import (
 	"strings"
 
 	"github.com/ghodss/yaml"
-
 	"k8s.io/kubernetes/pkg/api"
 	kerrors "k8s.io/kubernetes/pkg/api/errors"
 	"k8s.io/kubernetes/pkg/apis/extensions"
