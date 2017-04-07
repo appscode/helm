@@ -17,6 +17,7 @@ It has these top-level messages:
 	Hook
 	Info
 	Release
+	ReleaseSummary
 	Status
 	TestRun
 	TestSuite
