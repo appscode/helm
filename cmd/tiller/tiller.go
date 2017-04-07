@@ -27,8 +27,9 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/grpc-ecosystem/grpc-gateway/runtime"
 	"github.com/spf13/cobra"
-
+	"golang.org/x/net/context"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials"
 
@@ -72,6 +73,7 @@ var (
 	grpcAddr      = ":44134"
 	probeAddr     = ":44135"
 	traceAddr     = ":44136"
+	gatewayAddr   = ":44137"
 	enableTracing = false
 	store         = storageConfigMap
 )
@@ -82,6 +84,7 @@ var (
 	keyFile    string
 	certFile   string
 	caCertFile string
+	apiDomain  string
 )
 
 const globalUsage = `The Kubernetes Helm server.
@@ -113,6 +116,7 @@ func main() {
 	p.StringVar(&keyFile, "tls-key", tlsDefaultsFromEnv("tls-key"), "path to TLS private key file")
 	p.StringVar(&certFile, "tls-cert", tlsDefaultsFromEnv("tls-cert"), "path to TLS certificate file")
 	p.StringVar(&caCertFile, "tls-ca-cert", tlsDefaultsFromEnv("tls-ca-cert"), "trust certificates signed by this CA")
+	p.StringVar(&apiDomain, "api-domain", "", "Domain used for apiserver (prod: tiller-2.appscode.com")
 
 	if err := rootCommand.Execute(); err != nil {
 		fmt.Fprint(os.Stderr, err)
@@ -162,6 +166,7 @@ func start(c *cobra.Command, args []string) {
 
 	fmt.Printf("Starting Tiller %s (tls=%t)\n", version.GetVersion(), tlsEnable || tlsVerify)
 	fmt.Printf("GRPC listening on %s\n", grpcAddr)
+	fmt.Printf("Gateway listening on %s\n", gatewayAddr)
 	fmt.Printf("Probes listening on %s\n", probeAddr)
 	fmt.Printf("Storage driver is %s\n", env.Releases.Name())
 
@@ -169,13 +174,53 @@ func start(c *cobra.Command, args []string) {
 		startTracing(traceAddr)
 	}
 
-	srvErrCh := make(chan error)
+	grpcErrCh := make(chan error)
+	gwErrCh := make(chan error)
 	probeErrCh := make(chan error)
 	go func() {
 		svc := tiller.NewReleaseServer(env, clientset)
 		services.RegisterReleaseServiceServer(rootServer, svc)
 		if err := rootServer.Serve(lstn); err != nil {
-			srvErrCh <- err
+			grpcErrCh <- err
+		}
+	}()
+
+	go func() {
+		ctx := context.Background()
+		ctx, cancel := context.WithCancel(ctx)
+		defer cancel()
+
+		mux := runtime.NewServeMux(
+			runtime.EqualFoldMatcher("x-helm-api-client"),
+			runtime.PrefixFoldMatcher("k8s-"),
+		)
+
+		var opts []grpc.DialOption
+		if tlsEnable || tlsVerify {
+			tlsopts := tlsutil.Options{InsecureSkipVerify: true}
+			if tlsVerify {
+				tlsopts.CaCertFile = caCertFile
+				tlsopts.InsecureSkipVerify = false
+			}
+			tlscfg, err := tlsutil.ClientConfig(tlsopts)
+			if err != nil {
+				fmt.Fprintln(os.Stderr, err)
+				os.Exit(2)
+			}
+			if apiDomain != "" {
+				tlscfg.ServerName = apiDomain
+			}
+			opts = append(opts, grpc.WithTransportCredentials(credentials.NewTLS(tlscfg)))
+		} else {
+			opts = append(opts, grpc.WithInsecure())
+		}
+		err := services.RegisterReleaseServiceHandlerFromEndpoint(ctx, mux, "localhost"+grpcAddr, opts)
+		if err != nil {
+			gwErrCh <- err
+			return
+		}
+		if err := http.ListenAndServe(gatewayAddr, mux); err != nil {
+			gwErrCh <- err
 		}
 	}()
 
@@ -187,8 +232,11 @@ func start(c *cobra.Command, args []string) {
 	}()
 
 	select {
-	case err := <-srvErrCh:
-		fmt.Fprintf(os.Stderr, "Server died: %s\n", err)
+	case err := <-grpcErrCh:
+		fmt.Fprintf(os.Stderr, "gRPC server died: %s\n", err)
+		os.Exit(1)
+	case err := <-gwErrCh:
+		fmt.Fprintf(os.Stderr, "Gateway server died: %s\n", err)
 		os.Exit(1)
 	case err := <-probeErrCh:
 		fmt.Fprintf(os.Stderr, "Probes server died: %s\n", err)
