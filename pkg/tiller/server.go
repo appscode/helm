@@ -127,7 +127,7 @@ type serverStreamWrapper struct {
 	ctx context.Context
 }
 
-func (w serverStreamWrapper) Context() context.Context            { return w.ctx }
+func (w serverStreamWrapper) Context() context.Context        { return w.ctx }
 func (w serverStreamWrapper) RecvMsg(msg interface{}) error   { return w.ss.RecvMsg(msg) }
 func (w serverStreamWrapper) SendMsg(msg interface{}) error   { return w.ss.SendMsg(msg) }
 func (w serverStreamWrapper) SendHeader(md metadata.MD) error { return w.ss.SendHeader(md) }
