@@ -1,5 +1,5 @@
-hash: 83bff8fc6a9aaef5e9e6524e047ca308df5a191ba4de7505dc8e93d627ffd157
-updated: 2017-04-07T12:07:56.22109347-07:00
+hash: fd5c527fa4f22539e078dfab1f9a910f0a458c2271736829f38d0f5ea08d0417
+updated: 2017-04-07T12:47:15.940373057-07:00
 imports:
 - name: cloud.google.com/go
   version: 3b1ae45394a234c385be014e9a488f2bb6eef821
@@ -155,7 +155,9 @@ imports:
 - name: github.com/golang/protobuf
   version: 8ee79997227bf9b34611aee7946ae64735e6fd93
   subpackages:
+  - jsonpb
   - proto
+  - protoc-gen-go/descriptor
   - ptypes/any
   - ptypes/timestamp
 - name: github.com/google/gofuzz
@@ -165,6 +167,13 @@ imports:
   subpackages:
   - util/strutil
   - util/wordwrap
+- name: github.com/grpc-ecosystem/grpc-gateway
+  version: 0105e1c52e9b941244cf1840be2dad9c971fa534
+  repo: https://github.com/appscode/grpc-gateway.git
+  subpackages:
+  - runtime
+  - runtime/internal
+  - utilities
 - name: github.com/howeyc/gopass
   version: 3ca23474a7c7203e0a0a070fd33508f6efdb9b3d
 - name: github.com/imdario/mergo
@@ -286,6 +295,10 @@ imports:
   - internal/remote_api
   - internal/urlfetch
   - urlfetch
+- name: google.golang.org/genproto
+  version: 411e09b969b1170a9f0c467558eb4c4c110d9c77
+  subpackages:
+  - googleapis/api/annotations
 - name: google.golang.org/grpc
   version: cdee119ee21e61eef7093a41ba148fa83585e143
   subpackages:
