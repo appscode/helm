@@ -22,11 +22,15 @@ import (
 	"testing"
 	"time"
 
+	"k8s.io/kubernetes/pkg/api"
+	"k8s.io/kubernetes/pkg/client/clientset_generated/internalclientset"
+	"k8s.io/kubernetes/pkg/client/clientset_generated/internalclientset/typed/authorization/internalversion"
+	"k8s.io/kubernetes/pkg/client/typed/discovery"
+	"k8s.io/kubernetes/pkg/kubectl/resource"
+
 	"k8s.io/helm/pkg/chartutil"
 	"k8s.io/helm/pkg/kube"
 	"k8s.io/helm/pkg/proto/hapi/chart"
-	"k8s.io/kubernetes/pkg/api"
-	"k8s.io/kubernetes/pkg/kubectl/resource"
 )
 
 type mockEngine struct {
@@ -37,7 +41,9 @@ func (e *mockEngine) Render(chrt *chart.Chart, v chartutil.Values) (map[string]s
 	return e.out, nil
 }
 
-type mockKubeClient struct{}
+type mockKubeClient struct {
+	Clientset internalclientset.Interface
+}
 
 func (k *mockKubeClient) Create(ns string, r io.Reader, timeout int64, shouldWait bool) error {
 	return nil
@@ -68,6 +74,14 @@ func (k *mockKubeClient) WaitAndGetCompletedPodStatus(namespace string, reader i
 	return "", nil
 }
 
+func (k *mockKubeClient) Discovery() (discovery.DiscoveryInterface, error) {
+	return k.Clientset.Discovery(), nil
+}
+
+func (k *mockKubeClient) Authorization() (internalversion.AuthorizationInterface, error) {
+	return k.Clientset.Authorization(), nil
+}
+
 var _ Engine = &mockEngine{}
 var _ KubeClient = &mockKubeClient{}
 var _ KubeClient = &PrintingKubeClient{}
@@ -89,8 +103,6 @@ func TestEngine(t *testing.T) {
 
 func TestKubeClient(t *testing.T) {
 	kc := &mockKubeClient{}
-	env := New()
-	env.KubeClient = kc
 
 	manifests := map[string]string{
 		"foo": "name: value\n",
@@ -103,7 +115,7 @@ func TestKubeClient(t *testing.T) {
 		b.WriteString(content)
 	}
 
-	if err := env.KubeClient.Create("sharry-bobbins", b, 300, false); err != nil {
+	if err := kc.Create("sharry-bobbins", b, 300, false); err != nil {
 		t.Errorf("Kubeclient failed: %s", err)
 	}
 }
