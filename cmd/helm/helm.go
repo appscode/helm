@@ -17,6 +17,7 @@ limitations under the License.
 package main // import "k8s.io/helm/cmd/helm"
 
 import (
+	"encoding/base64"
 	"errors"
 	"fmt"
 	"io"
@@ -27,8 +28,10 @@ import (
 	"strings"
 
 	"github.com/spf13/cobra"
+	"golang.org/x/net/context"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/grpclog"
+	"google.golang.org/grpc/metadata"
 	"k8s.io/kubernetes/pkg/client/clientset_generated/internalclientset"
 	"k8s.io/kubernetes/pkg/client/restclient"
 
@@ -268,6 +271,37 @@ func getKubeClient(context string) (*restclient.Config, *internalclientset.Clien
 		return nil, nil, fmt.Errorf("could not get kubernetes client: %s", err)
 	}
 	return config, client, nil
+}
+
+func loadAuthHeaders(ctx context.Context) context.Context {
+	c, err := kube.GetConfig(kubeContext).ClientConfig()
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Failed to extract authentication headers: %s\n", err)
+		os.Exit(1)
+	}
+	m := map[string]string{}
+
+	if c.AuthProvider != nil {
+		switch c.AuthProvider.Name {
+		case "gcp":
+			m[string(kube.Authorization)] = "Bearer " + c.AuthProvider.Config["access_token"]
+		case "oidc":
+			m[string(kube.Authorization)] = "Bearer " + c.AuthProvider.Config["id-token"]
+		default:
+			fmt.Fprintf(os.Stderr, "Unknown auth provider: %s\n", c.AuthProvider.Name)
+			os.Exit(1)
+		}
+	}
+
+	if len(c.BearerToken) != 0 {
+		m[string(kube.Authorization)] = "Bearer " + c.BearerToken
+	}
+	if len(c.Username) != 0 && len(c.Password) != 0 {
+		m[string(kube.Authorization)] = "Basic " + base64.StdEncoding.EncodeToString([]byte(c.Username+":"+c.Password))
+	}
+
+	md, _ := metadata.FromContext(ctx)
+	return metadata.NewContext(ctx, metadata.Join(md, metadata.New(m)))
 }
 
 // getKubeCmd is a convenience method for creating kubernetes cmd client
