@@ -56,6 +56,9 @@ func (h *Client) ListReleases(opts ...ReleaseListOption) (*rls.ListReleasesRespo
 	req := &h.opts.listReq
 	ctx := NewContext()
 
+	if h.opts.withContext != nil {
+		ctx = h.opts.withContext(ctx)
+	}
 	if h.opts.before != nil {
 		if err := h.opts.before(ctx, req); err != nil {
 			return nil, err
@@ -88,7 +91,9 @@ func (h *Client) InstallReleaseFromChart(chart *chart.Chart, ns string, opts ...
 	req.DisableHooks = h.opts.disableHooks
 	req.ReuseName = h.opts.reuseName
 	ctx := NewContext()
-
+	if h.opts.withContext != nil {
+		ctx = h.opts.withContext(ctx)
+	}
 	if h.opts.before != nil {
 		if err := h.opts.before(ctx, req); err != nil {
 			return nil, err
@@ -126,7 +131,9 @@ func (h *Client) DeleteRelease(rlsName string, opts ...DeleteOption) (*rls.Unins
 	req.Name = rlsName
 	req.DisableHooks = h.opts.disableHooks
 	ctx := NewContext()
-
+	if h.opts.withContext != nil {
+		ctx = h.opts.withContext(ctx)
+	}
 	if h.opts.before != nil {
 		if err := h.opts.before(ctx, req); err != nil {
 			return nil, err
@@ -162,7 +169,9 @@ func (h *Client) UpdateReleaseFromChart(rlsName string, chart *chart.Chart, opts
 	req.ResetValues = h.opts.resetValues
 	req.ReuseValues = h.opts.reuseValues
 	ctx := NewContext()
-
+	if h.opts.withContext != nil {
+		ctx = h.opts.withContext(ctx)
+	}
 	if h.opts.before != nil {
 		if err := h.opts.before(ctx, req); err != nil {
 			return nil, err
@@ -187,7 +196,9 @@ func (h *Client) GetVersion(opts ...VersionOption) (*rls.GetVersionResponse, err
 	}
 	req := &rls.GetVersionRequest{}
 	ctx := NewContext()
-
+	if h.opts.withContext != nil {
+		ctx = h.opts.withContext(ctx)
+	}
 	if h.opts.before != nil {
 		if err := h.opts.before(ctx, req); err != nil {
 			return nil, err
@@ -206,7 +217,9 @@ func (h *Client) RollbackRelease(rlsName string, opts ...RollbackOption) (*rls.R
 	req.DryRun = h.opts.dryRun
 	req.Name = rlsName
 	ctx := NewContext()
-
+	if h.opts.withContext != nil {
+		ctx = h.opts.withContext(ctx)
+	}
 	if h.opts.before != nil {
 		if err := h.opts.before(ctx, req); err != nil {
 			return nil, err
@@ -223,7 +236,9 @@ func (h *Client) ReleaseStatus(rlsName string, opts ...StatusOption) (*rls.GetRe
 	req := &h.opts.statusReq
 	req.Name = rlsName
 	ctx := NewContext()
-
+	if h.opts.withContext != nil {
+		ctx = h.opts.withContext(ctx)
+	}
 	if h.opts.before != nil {
 		if err := h.opts.before(ctx, req); err != nil {
 			return nil, err
@@ -240,7 +255,9 @@ func (h *Client) ReleaseContent(rlsName string, opts ...ContentOption) (*rls.Get
 	req := &h.opts.contentReq
 	req.Name = rlsName
 	ctx := NewContext()
-
+	if h.opts.withContext != nil {
+		ctx = h.opts.withContext(ctx)
+	}
 	if h.opts.before != nil {
 		if err := h.opts.before(ctx, req); err != nil {
 			return nil, err
@@ -258,7 +275,9 @@ func (h *Client) ReleaseHistory(rlsName string, opts ...HistoryOption) (*rls.Get
 	req := &h.opts.histReq
 	req.Name = rlsName
 	ctx := NewContext()
-
+	if h.opts.withContext != nil {
+		ctx = h.opts.withContext(ctx)
+	}
 	if h.opts.before != nil {
 		if err := h.opts.before(ctx, req); err != nil {
 			return nil, err

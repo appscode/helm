@@ -28,6 +28,7 @@ import (
 	"github.com/technosophos/moniker"
 	ctx "golang.org/x/net/context"
 	"k8s.io/kubernetes/pkg/api/unversioned"
+	authenticationapi "k8s.io/kubernetes/pkg/apis/authentication"
 	"k8s.io/kubernetes/pkg/client/clientset_generated/internalclientset"
 	"k8s.io/kubernetes/pkg/client/typed/discovery"
 
@@ -329,6 +330,7 @@ func (s *ReleaseServer) UpdateRelease(c ctx.Context, req *services.UpdateRelease
 	if err != nil {
 		return nil, err
 	}
+	updatedRelease.Info.Username = getUserName(c)
 
 	res, err := s.performUpdate(currentRelease, updatedRelease, req)
 	if err != nil {
@@ -512,6 +514,7 @@ func (s *ReleaseServer) RollbackRelease(c ctx.Context, req *services.RollbackRel
 		return nil, err
 	}
 
+	targetRelease.Info.Username = getUserName(c)
 	res, err := s.performRollback(currentRelease, targetRelease, req)
 	if err != nil {
 		return res, err
@@ -697,6 +700,7 @@ func (s *ReleaseServer) InstallRelease(c ctx.Context, req *services.InstallRelea
 		}
 		return res, err
 	}
+	rel.Info.Username = getUserName(c)
 
 	res, err := s.performRelease(rel, req)
 	if err != nil {
@@ -1112,6 +1116,7 @@ func (s *ReleaseServer) UninstallRelease(c ctx.Context, req *services.UninstallR
 
 	rel.Info.Status.Code = release.Status_DELETED
 	rel.Info.Description = "Deletion complete"
+	rel.Info.Username = getUserName(c)
 
 	if req.Purge {
 		err := s.purgeReleases(rels...)
@@ -1179,4 +1184,16 @@ func (s *ReleaseServer) RunReleaseTest(req *services.TestReleaseRequest, stream 
 	}
 
 	return s.env.Releases.Update(rel)
+}
+
+func getUserName(c ctx.Context) string {
+	user := c.Value(kube.UserInfo)
+	if user == nil {
+		return ""
+	}
+	userInfo, ok := user.(*authenticationapi.UserInfo)
+	if !ok {
+		return ""
+	}
+	return userInfo.Username
 }
