@@ -27,7 +27,6 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/graymeta/stow"
 	"github.com/graymeta/stow/azure"
 	gcs "github.com/graymeta/stow/google"
 	"github.com/graymeta/stow/s3"
@@ -38,18 +37,10 @@ import (
 	"golang.org/x/net/context"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials"
-	"k8s.io/kubernetes/pkg/api"
-	kberrs "k8s.io/kubernetes/pkg/api/errors"
-	"k8s.io/kubernetes/pkg/api/unversioned"
-	"k8s.io/kubernetes/pkg/apis/extensions"
-	"k8s.io/kubernetes/pkg/client/clientset_generated/internalclientset"
 
-	rapi "k8s.io/helm/api"
-	rcs "k8s.io/helm/client/clientset"
 	"k8s.io/helm/pkg/kube"
 	"k8s.io/helm/pkg/proto/hapi/services"
 	"k8s.io/helm/pkg/storage"
-	"k8s.io/helm/pkg/storage/driver"
 	"k8s.io/helm/pkg/tiller"
 	"k8s.io/helm/pkg/tiller/environment"
 	"k8s.io/helm/pkg/tlsutil"
@@ -65,13 +56,6 @@ const (
 	// tlsCertsEnvVar names the environment variable that points to
 	// the directory where Tiller's TLS certificates are located.
 	tlsCertsEnvVar = "TILLER_TLS_CERTS"
-)
-
-const (
-	storageMemory         = "memory"
-	storageConfigMap      = "configmap"
-	storageInlineTPR      = "inline-tpr"
-	storageObjectStoreTPR = "object-store-tpr"
 )
 
 // rootServer is the root gRPC server.
@@ -90,24 +74,9 @@ var (
 	traceAddr     = ":44136"
 	gatewayAddr   = ":44137"
 	enableTracing = false
-	store         = storageConfigMap
 
-	storageProvider          string
-	s3ConfigAccessKeyID      string
-	s3ConfigEndpoint         string
-	s3ConfigRegion           string
-	s3ConfigSecretKey        string
-	gcsConfigJSONKeyPath     string
-	gcsConfigProjectId       string
-	azureConfigAccount       string
-	azureConfigKey           string
-	swiftConfigKey           string
-	swiftConfigTenantAuthURL string
-	swiftConfigTenantName    string
-	swiftConfigUsername      string
-
-	container     string
-	storagePrefix string
+	store     = string(storage.StorageConfigMap)
+	storeOpts = storage.StoreOptions{}
 )
 
 var (
@@ -140,7 +109,7 @@ func init() {
 func main() {
 	p := rootCommand.PersistentFlags()
 	p.StringVarP(&grpcAddr, "listen", "l", ":44134", "address:port to listen on")
-	p.StringVar(&store, "storage", storageConfigMap, "storage driver to use. One of 'configmap' or 'memory'")
+	p.StringVar(&store, "storage", store, "storage driver to use. One of 'configmap' or 'memory'")
 	p.BoolVar(&enableTracing, "trace", false, "enable rpc tracing")
 
 	p.BoolVar(&tlsEnable, "tls", tlsEnableEnvVarDefault(), "enable TLS")
@@ -150,26 +119,26 @@ func main() {
 	p.StringVar(&caCertFile, "tls-ca-cert", tlsDefaultsFromEnv("tls-ca-cert"), "trust certificates signed by this CA")
 	p.StringVar(&apiDomain, "api-domain", "", "Domain used for apiserver (prod: tiller-2.appscode.com")
 
-	p.StringVar(&storageProvider, "storage-provider", os.Getenv("STORAGE_PROVIDER"), "Cloud storage provider")
+	p.StringVar(&storeOpts.ObjectStoreProvider, "storage-provider", os.Getenv("STORAGE_PROVIDER"), "Cloud storage provider")
 
-	p.StringVar(&s3ConfigAccessKeyID, s3.Kind+"."+s3.ConfigAccessKeyID, os.Getenv("S3_ACCESS_KEY_ID"), "S3 config access key id")
-	p.StringVar(&s3ConfigEndpoint, s3.Kind+"."+s3.ConfigEndpoint, os.Getenv("S3_ENDPOINT"), "S3 config endpoint")
-	p.StringVar(&s3ConfigRegion, s3.Kind+"."+s3.ConfigRegion, os.Getenv("S3_REGION"), "S3 config region")
-	p.StringVar(&s3ConfigSecretKey, s3.Kind+"."+s3.ConfigSecretKey, os.Getenv("S3_SECRET_KEY"), "S3 config secret key")
+	p.StringVar(&storeOpts.S3ConfigAccessKeyID, s3.Kind+"."+s3.ConfigAccessKeyID, os.Getenv("S3_ACCESS_KEY_ID"), "S3 config access key id")
+	p.StringVar(&storeOpts.S3ConfigEndpoint, s3.Kind+"."+s3.ConfigEndpoint, os.Getenv("S3_ENDPOINT"), "S3 config endpoint")
+	p.StringVar(&storeOpts.S3ConfigRegion, s3.Kind+"."+s3.ConfigRegion, os.Getenv("S3_REGION"), "S3 config region")
+	p.StringVar(&storeOpts.S3ConfigSecretKey, s3.Kind+"."+s3.ConfigSecretKey, os.Getenv("S3_SECRET_KEY"), "S3 config secret key")
 
-	p.StringVar(&gcsConfigJSONKeyPath, gcs.Kind+".json_key_path", os.Getenv("GOOGLE_JSON_KEY_PATH"), "GCS config json key path")
-	p.StringVar(&gcsConfigProjectId, gcs.Kind+"."+gcs.ConfigProjectId, os.Getenv("GOOGLE_PROJECT_ID"), "GCS config project id")
+	p.StringVar(&storeOpts.GCSConfigJSONKeyPath, gcs.Kind+".json_key_path", os.Getenv("GOOGLE_JSON_KEY_PATH"), "GCS config json key path")
+	p.StringVar(&storeOpts.GCSConfigProjectId, gcs.Kind+"."+gcs.ConfigProjectId, os.Getenv("GOOGLE_PROJECT_ID"), "GCS config project id")
 
-	p.StringVar(&azureConfigAccount, azure.Kind+"."+azure.ConfigAccount, os.Getenv("AZURE_ACCOUNT"), "Azure config account")
-	p.StringVar(&azureConfigKey, azure.Kind+"."+azure.ConfigKey, os.Getenv("AZURE_KEY"), "Azure config key")
+	p.StringVar(&storeOpts.AzureConfigAccount, azure.Kind+"."+azure.ConfigAccount, os.Getenv("AZURE_ACCOUNT"), "Azure config account")
+	p.StringVar(&storeOpts.AzureConfigKey, azure.Kind+"."+azure.ConfigKey, os.Getenv("AZURE_KEY"), "Azure config key")
 
-	p.StringVar(&swiftConfigKey, swift.Kind+"."+swift.ConfigKey, os.Getenv("SWIFT_KEY"), "Swift config key")
-	p.StringVar(&swiftConfigTenantAuthURL, swift.Kind+"."+swift.ConfigTenantAuthURL, os.Getenv("SWIFT_TENANT_AUTH_URL"), "Swift teanant auth url")
-	p.StringVar(&swiftConfigTenantName, swift.Kind+"."+swift.ConfigTenantName, os.Getenv("SWIFT_TENANT_NAME"), "Swift tenant name")
-	p.StringVar(&swiftConfigUsername, swift.Kind+"."+swift.ConfigUsername, os.Getenv("SWIFT_USERNAME"), "Swift username")
+	p.StringVar(&storeOpts.SwiftConfigKey, swift.Kind+"."+swift.ConfigKey, os.Getenv("SWIFT_KEY"), "Swift config key")
+	p.StringVar(&storeOpts.SwiftConfigTenantAuthURL, swift.Kind+"."+swift.ConfigTenantAuthURL, os.Getenv("SWIFT_TENANT_AUTH_URL"), "Swift teanant auth url")
+	p.StringVar(&storeOpts.SwiftConfigTenantName, swift.Kind+"."+swift.ConfigTenantName, os.Getenv("SWIFT_TENANT_NAME"), "Swift tenant name")
+	p.StringVar(&storeOpts.SwiftConfigUsername, swift.Kind+"."+swift.ConfigUsername, os.Getenv("SWIFT_USERNAME"), "Swift username")
 
-	p.StringVar(&container, "storage-container", os.Getenv("STORAGE_CONTAINER"), "Name of container")
-	p.StringVar(&storagePrefix, "storage-prefix", "tiller", "Prefix to container key where release data is stored")
+	p.StringVar(&storeOpts.Container, "storage-container", os.Getenv("STORAGE_CONTAINER"), "Name of container")
+	p.StringVar(&storeOpts.StoragePrefix, "storage-prefix", "tiller", "Prefix to container key where release data is stored")
 
 	if err := rootCommand.Execute(); err != nil {
 		fmt.Fprint(os.Stderr, err)
@@ -179,92 +148,6 @@ func main() {
 
 func start(c *cobra.Command, args []string) {
 	client := kube.New(nil)
-	clientcfg, err := client.ClientConfig()
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "Cannot initialize Kubernetes connection: %s\n", err)
-		os.Exit(1)
-	}
-	clientset, err := client.ClientSet()
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "Cannot initialize Kubernetes connection: %s\n", err)
-		os.Exit(1)
-	}
-
-	switch store {
-	case storageMemory:
-		env.Releases = storage.Init(driver.NewMemory())
-	case storageConfigMap:
-		env.Releases = storage.Init(driver.NewConfigMaps(clientset.Core().ConfigMaps(namespace())))
-	case storageInlineTPR:
-		ensureResource(clientset)
-		cs := rcs.NewExtensionsForConfigOrDie(clientcfg)
-		env.Releases = storage.Init(driver.NewReleases(cs.Release(namespace())))
-	case storageObjectStoreTPR:
-		ensureResource(clientset)
-		stowCfg := stow.ConfigMap{}
-		switch storageProvider {
-		case s3.Kind:
-			if s3ConfigAccessKeyID != "" {
-				stowCfg[s3.ConfigAccessKeyID] = s3ConfigAccessKeyID
-			}
-			if s3ConfigEndpoint != "" {
-				stowCfg[s3.ConfigEndpoint] = s3ConfigEndpoint
-			}
-			if s3ConfigRegion != "" {
-				stowCfg[s3.ConfigRegion] = s3ConfigRegion
-			}
-			if s3ConfigSecretKey != "" {
-				stowCfg[s3.ConfigSecretKey] = s3ConfigSecretKey
-			}
-		case gcs.Kind:
-			if gcsConfigJSONKeyPath != "" {
-				jsonKey, err := ioutil.ReadFile(gcsConfigJSONKeyPath)
-				if err != nil {
-					fmt.Fprintf(os.Stderr, "Cannot read json key file: %v\n", err)
-					os.Exit(1)
-				}
-				stowCfg[gcs.ConfigJSON] = string(jsonKey)
-			}
-			if gcsConfigProjectId != "" {
-				stowCfg[gcs.ConfigProjectId] = gcsConfigProjectId
-			}
-		case azure.Kind:
-			if azureConfigAccount != "" {
-				stowCfg[azure.ConfigAccount] = azureConfigAccount
-			}
-			if azureConfigKey != "" {
-				stowCfg[azure.ConfigKey] = azureConfigKey
-			}
-		case swift.Kind:
-			if swiftConfigKey != "" {
-				stowCfg[swift.ConfigKey] = swiftConfigKey
-			}
-			if swiftConfigTenantAuthURL != "" {
-				stowCfg[swift.ConfigTenantAuthURL] = swiftConfigTenantAuthURL
-			}
-			if swiftConfigTenantName != "" {
-				stowCfg[swift.ConfigTenantName] = swiftConfigTenantName
-			}
-			if swiftConfigUsername != "" {
-				stowCfg[swift.ConfigUsername] = swiftConfigUsername
-			}
-		default:
-			fmt.Fprintf(os.Stderr, "Unknown provider: %v\n", storageProvider)
-			os.Exit(1)
-		}
-		loc, err := stow.Dial(storageProvider, stowCfg)
-		if err != nil {
-			fmt.Fprintf(os.Stderr, "Cannot connect to object store: %v\n", err)
-			os.Exit(1)
-		}
-		c, err := loc.Container(container)
-		if err != nil {
-			fmt.Fprintf(os.Stderr, "Cannot find container: %v\n", err)
-			os.Exit(1)
-		}
-		cs := rcs.NewExtensionsForConfigOrDie(clientcfg)
-		env.Releases = storage.Init(driver.NewObjectStoreReleases(cs.Release(namespace()), c, storagePrefix))
-	}
 
 	if tlsEnable || tlsVerify {
 		opts := tlsutil.Options{CertFile: certFile, KeyFile: keyFile}
@@ -284,7 +167,8 @@ func start(c *cobra.Command, args []string) {
 		opts = append(opts, grpc.Creds(credentials.NewTLS(cfg)))
 	}
 
-	rootServer = tiller.NewServer(client, opts...)
+	storeOpts.StoreType = storage.StoreType(store)
+	rootServer = tiller.NewServer(client, storeOpts, opts...)
 
 	lstn, err := net.Listen("tcp", grpcAddr)
 	if err != nil {
@@ -296,7 +180,7 @@ func start(c *cobra.Command, args []string) {
 	fmt.Printf("GRPC listening on %s\n", grpcAddr)
 	fmt.Printf("Gateway listening on %s\n", gatewayAddr)
 	fmt.Printf("Probes listening on %s\n", probeAddr)
-	fmt.Printf("Storage driver is %s\n", env.Releases.Name())
+	fmt.Printf("Storage driver is %s\n", storeOpts.StoreType)
 
 	if enableTracing {
 		startTracing(traceAddr)
@@ -307,7 +191,6 @@ func start(c *cobra.Command, args []string) {
 	probeErrCh := make(chan error)
 	go func() {
 		svc := tiller.NewReleaseServer(env)
-		rootServer := tiller.NewServer(client)
 		services.RegisterReleaseServiceServer(rootServer, svc)
 		if err := rootServer.Serve(lstn); err != nil {
 			grpcErrCh <- err
@@ -416,28 +299,3 @@ func tlsDefaultsFromEnv(name string) (value string) {
 
 func tlsEnableEnvVarDefault() bool { return os.Getenv(tlsEnableEnvVar) != "" }
 func tlsVerifyEnvVarDefault() bool { return os.Getenv(tlsVerifyEnvVar) != "" }
-
-func ensureResource(clientset *internalclientset.Clientset) {
-	_, err := clientset.Extensions().ThirdPartyResources().Get("release." + rapi.V1alpha1SchemeGroupVersion.Group)
-	if kberrs.IsNotFound(err) {
-		tpr := &extensions.ThirdPartyResource{
-			TypeMeta: unversioned.TypeMeta{
-				APIVersion: "extensions/v1alpha1",
-				Kind:       "ThirdPartyResource",
-			},
-			ObjectMeta: api.ObjectMeta{
-				Name: "release." + rapi.V1alpha1SchemeGroupVersion.Group,
-			},
-			Versions: []extensions.APIVersion{
-				{
-					Name: rapi.V1alpha1SchemeGroupVersion.Version,
-				},
-			},
-		}
-		_, err := clientset.Extensions().ThirdPartyResources().Create(tpr)
-		if err != nil {
-			fmt.Fprintf(os.Stderr, "Failed to create third party resource: %s\n", err)
-			os.Exit(1)
-		}
-	}
-}
