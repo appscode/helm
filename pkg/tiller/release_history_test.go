@@ -68,9 +68,9 @@ func TestGetHistory_WithRevisions(t *testing.T) {
 		mk("angry-bird", 1, rpb.Status_SUPERSEDED),
 	}
 
-	srv := rsFixture()
+	srv, store := rsFixture()
 	for _, rls := range hist {
-		if err := srv.env.Releases.Create(rls); err != nil {
+		if err := store.Create(rls); err != nil {
 			t.Fatalf("Failed to create release: %s", err)
 		}
 	}
@@ -100,8 +100,8 @@ func TestGetHistory_WithNoRevisions(t *testing.T) {
 
 	// create release 'sad-panda' with no revision history
 	rls := namedReleaseStub("sad-panda", rpb.Status_DEPLOYED)
-	srv := rsFixture()
-	srv.env.Releases.Create(rls)
+	srv, store := rsFixture()
+	store.Create(rls)
 
 	for _, tt := range tests {
 		res, err := srv.GetHistory(helm.NewContext(), tt.req)

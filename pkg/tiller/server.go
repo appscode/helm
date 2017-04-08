@@ -37,6 +37,7 @@ import (
 	clientcmdapi "k8s.io/kubernetes/pkg/client/unversioned/clientcmd/api"
 
 	"k8s.io/helm/pkg/kube"
+	"k8s.io/helm/pkg/storage"
 	"k8s.io/helm/pkg/version"
 )
 
@@ -45,17 +46,17 @@ import (
 var maxMsgSize = 1024 * 1024 * 10
 
 // DefaultServerOpts returns the set of default grpc ServerOption's that Tiller requires.
-func DefaultServerOpts(sysCli *kube.Client) []grpc.ServerOption {
+func DefaultServerOpts(sysCli *kube.Client, storeOpts storage.StoreOptions) []grpc.ServerOption {
 	return []grpc.ServerOption{
 		grpc.MaxMsgSize(maxMsgSize),
-		grpc.UnaryInterceptor(newUnaryInterceptor(sysCli)),
-		grpc.StreamInterceptor(newStreamInterceptor(sysCli)),
+		grpc.UnaryInterceptor(newUnaryInterceptor(sysCli, storeOpts)),
+		grpc.StreamInterceptor(newStreamInterceptor(sysCli, storeOpts)),
 	}
 }
 
 // NewServer creates a new grpc server.
-func NewServer(sysCli *kube.Client, opts ...grpc.ServerOption) *grpc.Server {
-	return grpc.NewServer(append(DefaultServerOpts(sysCli), opts...)...)
+func NewServer(sysCli *kube.Client, storeOpts storage.StoreOptions, opts ...grpc.ServerOption) *grpc.Server {
+	return grpc.NewServer(append(DefaultServerOpts(sysCli, storeOpts), opts...)...)
 }
 
 func authenticate(c context.Context, sysCli *kube.Client) (context.Context, error) {
@@ -80,7 +81,7 @@ func authenticate(c context.Context, sysCli *kube.Client) (context.Context, erro
 	return c, err
 }
 
-func newUnaryInterceptor(sysCli *kube.Client) grpc.UnaryServerInterceptor {
+func newUnaryInterceptor(sysCli *kube.Client, storeOpts storage.StoreOptions) grpc.UnaryServerInterceptor {
 	return func(ctx context.Context, req interface{}, info *grpc.UnaryServerInfo, handler grpc.UnaryHandler) (resp interface{}, err error) {
 		err = checkClientVersion(ctx)
 		if err != nil {
@@ -95,11 +96,17 @@ func newUnaryInterceptor(sysCli *kube.Client) grpc.UnaryServerInterceptor {
 			log.Println(err)
 			return nil, err
 		}
+		store, err := storage.NewStorage(sysCli, storeOpts)
+		if err != nil {
+			log.Println(err)
+			return nil, err
+		}
+		ctx = context.WithValue(ctx, kube.ReleaseStore, store)
 		return goprom.UnaryServerInterceptor(ctx, req, info, handler)
 	}
 }
 
-func newStreamInterceptor(sysCli *kube.Client) grpc.StreamServerInterceptor {
+func newStreamInterceptor(sysCli *kube.Client, storeOpts storage.StoreOptions) grpc.StreamServerInterceptor {
 	return func(srv interface{}, ss grpc.ServerStream, info *grpc.StreamServerInfo, handler grpc.StreamHandler) error {
 		ctx := ss.Context()
 		err := checkClientVersion(ctx)
@@ -112,7 +119,12 @@ func newStreamInterceptor(sysCli *kube.Client) grpc.StreamServerInterceptor {
 			log.Println(err)
 			return err
 		}
-
+		store, err := storage.NewStorage(sysCli, storeOpts)
+		if err != nil {
+			log.Println(err)
+			return err
+		}
+		ctx = context.WithValue(ctx, kube.ReleaseStore, store)
 		newStream := serverStreamWrapper{
 			ss:  ss,
 			ctx: ctx,

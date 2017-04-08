@@ -36,8 +36,6 @@ import (
 	"k8s.io/helm/pkg/engine"
 	"k8s.io/helm/pkg/kube"
 	"k8s.io/helm/pkg/proto/hapi/chart"
-	"k8s.io/helm/pkg/storage"
-	"k8s.io/helm/pkg/storage/driver"
 )
 
 // DefaultTillerNamespace is the default namespace for tiller.
@@ -227,8 +225,6 @@ func (p *PrintingKubeClient) Authorization() (internalversion.AuthorizationInter
 type Environment struct {
 	// EngineYard provides access to the known template engines.
 	EngineYard EngineYard
-	// Releases stores records of releases.
-	Releases *storage.Storage
 }
 
 // New returns an environment initialized with the defaults.
@@ -242,6 +238,5 @@ func New() *Environment {
 
 	return &Environment{
 		EngineYard: ey,
-		Releases:   storage.Init(driver.NewMemory()),
 	}
 }
