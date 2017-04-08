@@ -25,4 +25,5 @@ const (
 	UserClient      AuthKey = "k8s-user-client"
 	SystemClient    AuthKey = "k8s-sys-client"
 	ImpersonateUser AuthKey = "k8s-impersonate-user"
+	ReleaseStore    AuthKey = "k8s-release-store"
 )

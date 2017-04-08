@@ -42,6 +42,7 @@ import (
 	"k8s.io/helm/pkg/proto/hapi/services"
 	reltesting "k8s.io/helm/pkg/releasetesting"
 	relutil "k8s.io/helm/pkg/releaseutil"
+	"k8s.io/helm/pkg/storage"
 	"k8s.io/helm/pkg/storage/driver"
 	"k8s.io/helm/pkg/tiller/environment"
 	"k8s.io/helm/pkg/timeconv"
@@ -106,7 +107,7 @@ type ListRequest interface {
 
 // ListReleases lists the releases found by the server.
 func (s *ReleaseServer) ListReleases(req *services.ListReleasesRequest, stream services.ReleaseService_ListReleasesServer) error {
-	rels, err := s.listReleases(req)
+	rels, err := s.listReleases(stream.Context(), req)
 	if err != nil {
 		return err
 	}
@@ -155,7 +156,7 @@ func (s *ReleaseServer) ListReleases(req *services.ListReleasesRequest, stream s
 
 // SummarizeReleases lists a summary of releases found by the server.
 func (s *ReleaseServer) SummarizeReleases(c ctx.Context, req *services.SummarizeReleasesRequest) (*services.SummarizeReleasesResponse, error) {
-	rels, err := s.listReleases(req)
+	rels, err := s.listReleases(c, req)
 	if err != nil {
 		return nil, err
 	}
@@ -179,14 +180,19 @@ func (s *ReleaseServer) SummarizeReleases(c ctx.Context, req *services.Summarize
 	return res, nil
 }
 
-func (s *ReleaseServer) listReleases(req ListRequest) ([]*release.Release, error) {
+func (s *ReleaseServer) listReleases(c ctx.Context, req ListRequest) ([]*release.Release, error) {
+	store, err := getReleaseStore(c)
+	if err != nil {
+		return nil, err
+	}
+
 	statusCodes := req.GetStatusCodes()
 	if len(statusCodes) == 0 {
 		statusCodes = []release.Status_Code{release.Status_DEPLOYED}
 	}
 
 	//rels, err := s.env.Releases.ListDeployed()
-	rels, err := s.env.Releases.ListFilterAll(func(r *release.Release) bool {
+	rels, err := store.ListFilterAll(func(r *release.Release) bool {
 		for _, sc := range statusCodes {
 			if sc == r.Info.Status.Code {
 				return true
@@ -264,18 +270,22 @@ func (s *ReleaseServer) GetReleaseStatus(c ctx.Context, req *services.GetRelease
 	if !ValidName.MatchString(req.Name) {
 		return nil, errMissingRelease
 	}
+	store, err := getReleaseStore(c)
+	if err != nil {
+		return nil, err
+	}
 
 	var rel *release.Release
 
 	if req.Version <= 0 {
 		var err error
-		rel, err = s.env.Releases.Last(req.Name)
+		rel, err = store.Last(req.Name)
 		if err != nil {
 			return nil, fmt.Errorf("getting deployed release %q: %s", req.Name, err)
 		}
 	} else {
 		var err error
-		if rel, err = s.env.Releases.Get(req.Name, req.Version); err != nil {
+		if rel, err = store.Get(req.Name, req.Version); err != nil {
 			return nil, fmt.Errorf("getting release '%s' (v%d): %s", req.Name, req.Version, err)
 		}
 	}
@@ -317,13 +327,17 @@ func (s *ReleaseServer) GetReleaseContent(c ctx.Context, req *services.GetReleas
 	if !ValidName.MatchString(req.Name) {
 		return nil, errMissingRelease
 	}
+	store, err := getReleaseStore(c)
+	if err != nil {
+		return nil, err
+	}
 
 	if req.Version <= 0 {
-		rel, err := s.env.Releases.Deployed(req.Name)
+		rel, err := store.Deployed(req.Name)
 		return &services.GetReleaseContentResponse{Release: rel}, err
 	}
 
-	rel, err := s.env.Releases.Get(req.Name, req.Version)
+	rel, err := store.Get(req.Name, req.Version)
 	return &services.GetReleaseContentResponse{Release: rel}, err
 }
 
@@ -345,7 +359,12 @@ func (s *ReleaseServer) UpdateRelease(c ctx.Context, req *services.UpdateRelease
 	}
 
 	if !req.DryRun {
-		if err := s.env.Releases.Create(updatedRelease); err != nil {
+		store, err := getReleaseStore(c)
+		if err != nil {
+			return nil, err
+		}
+
+		if err := store.Create(updatedRelease); err != nil {
 			return res, err
 		}
 	}
@@ -354,6 +373,11 @@ func (s *ReleaseServer) UpdateRelease(c ctx.Context, req *services.UpdateRelease
 
 func (s *ReleaseServer) performUpdate(c ctx.Context, originalRelease, updatedRelease *release.Release, req *services.UpdateReleaseRequest) (*services.UpdateReleaseResponse, error) {
 	res := &services.UpdateReleaseResponse{Release: updatedRelease}
+
+	store, err := getReleaseStore(c)
+	if err != nil {
+		return nil, err
+	}
 
 	updatedRelease.Info.Username = getUserName(c)
 	if req.DryRun {
@@ -375,8 +399,8 @@ func (s *ReleaseServer) performUpdate(c ctx.Context, originalRelease, updatedRel
 		originalRelease.Info.Status.Code = release.Status_SUPERSEDED
 		updatedRelease.Info.Status.Code = release.Status_FAILED
 		updatedRelease.Info.Description = msg
-		s.recordRelease(originalRelease, true)
-		s.recordRelease(updatedRelease, false)
+		s.recordRelease(store, originalRelease, true)
+		s.recordRelease(store, updatedRelease, false)
 		return res, err
 	}
 
@@ -388,7 +412,7 @@ func (s *ReleaseServer) performUpdate(c ctx.Context, originalRelease, updatedRel
 	}
 
 	originalRelease.Info.Status.Code = release.Status_SUPERSEDED
-	s.recordRelease(originalRelease, true)
+	s.recordRelease(store, originalRelease, true)
 
 	updatedRelease.Info.Status.Code = release.Status_DEPLOYED
 	updatedRelease.Info.Description = "Upgrade complete"
@@ -447,13 +471,17 @@ func (s *ReleaseServer) prepareUpdate(c ctx.Context, req *services.UpdateRelease
 	if !ValidName.MatchString(req.Name) {
 		return nil, nil, errMissingRelease
 	}
+	store, err := getReleaseStore(c)
+	if err != nil {
+		return nil, nil, err
+	}
 
 	if req.Chart == nil {
 		return nil, nil, errMissingChart
 	}
 
 	// finds the non-deleted release with the given name
-	currentRelease, err := s.env.Releases.Last(req.Name)
+	currentRelease, err := store.Last(req.Name)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -524,7 +552,7 @@ func (s *ReleaseServer) prepareUpdate(c ctx.Context, req *services.UpdateRelease
 
 // RollbackRelease rolls back to a previous version of the given release.
 func (s *ReleaseServer) RollbackRelease(c ctx.Context, req *services.RollbackReleaseRequest) (*services.RollbackReleaseResponse, error) {
-	currentRelease, targetRelease, err := s.prepareRollback(req)
+	currentRelease, targetRelease, err := s.prepareRollback(c, req)
 	if err != nil {
 		return nil, err
 	}
@@ -541,7 +569,12 @@ func (s *ReleaseServer) RollbackRelease(c ctx.Context, req *services.RollbackRel
 	}
 
 	if !req.DryRun {
-		if err := s.env.Releases.Create(targetRelease); err != nil {
+		store, err := getReleaseStore(c)
+		if err != nil {
+			return nil, err
+		}
+
+		if err := store.Create(targetRelease); err != nil {
 			return res, err
 		}
 	}
@@ -550,6 +583,11 @@ func (s *ReleaseServer) RollbackRelease(c ctx.Context, req *services.RollbackRel
 
 func (s *ReleaseServer) performRollback(c ctx.Context, currentRelease, targetRelease *release.Release, req *services.RollbackReleaseRequest) (*services.RollbackReleaseResponse, error) {
 	res := &services.RollbackReleaseResponse{Release: targetRelease}
+
+	store, err := getReleaseStore(c)
+	if err != nil {
+		return nil, err
+	}
 
 	targetRelease.Info.Username = getUserName(c)
 
@@ -571,8 +609,8 @@ func (s *ReleaseServer) performRollback(c ctx.Context, currentRelease, targetRel
 		currentRelease.Info.Status.Code = release.Status_SUPERSEDED
 		targetRelease.Info.Status.Code = release.Status_FAILED
 		targetRelease.Info.Description = msg
-		s.recordRelease(currentRelease, true)
-		s.recordRelease(targetRelease, false)
+		s.recordRelease(store, currentRelease, true)
+		s.recordRelease(store, targetRelease, false)
 		return res, err
 	}
 
@@ -584,7 +622,7 @@ func (s *ReleaseServer) performRollback(c ctx.Context, currentRelease, targetRel
 	}
 
 	currentRelease.Info.Status.Code = release.Status_SUPERSEDED
-	s.recordRelease(currentRelease, true)
+	s.recordRelease(store, currentRelease, true)
 
 	targetRelease.Info.Status.Code = release.Status_DEPLOYED
 
@@ -603,7 +641,7 @@ func (s *ReleaseServer) performKubeUpdate(c ctx.Context, currentRelease, targetR
 
 // prepareRollback finds the previous release and prepares a new release object with
 //  the previous release's configuration
-func (s *ReleaseServer) prepareRollback(req *services.RollbackReleaseRequest) (*release.Release, *release.Release, error) {
+func (s *ReleaseServer) prepareRollback(c ctx.Context, req *services.RollbackReleaseRequest) (*release.Release, *release.Release, error) {
 	switch {
 	case !ValidName.MatchString(req.Name):
 		return nil, nil, errMissingRelease
@@ -611,7 +649,12 @@ func (s *ReleaseServer) prepareRollback(req *services.RollbackReleaseRequest) (*
 		return nil, nil, errInvalidRevision
 	}
 
-	crls, err := s.env.Releases.Last(req.Name)
+	store, err := getReleaseStore(c)
+	if err != nil {
+		return nil, nil, err
+	}
+
+	crls, err := store.Last(req.Name)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -623,7 +666,7 @@ func (s *ReleaseServer) prepareRollback(req *services.RollbackReleaseRequest) (*
 
 	log.Printf("rolling back %s (current: v%d, target: v%d)", req.Name, crls.Version, rbv)
 
-	prls, err := s.env.Releases.Get(req.Name, rbv)
+	prls, err := store.Get(req.Name, rbv)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -653,18 +696,16 @@ func (s *ReleaseServer) prepareRollback(req *services.RollbackReleaseRequest) (*
 	return crls, target, nil
 }
 
-func (s *ReleaseServer) uniqName(start string, reuse bool) (string, error) {
-
+func (s *ReleaseServer) uniqName(store *storage.Storage, start string, reuse bool) (string, error) {
 	// If a name is supplied, we check to see if that name is taken. If not, it
 	// is granted. If reuse is true and a deleted release with that name exists,
 	// we re-grant it. Otherwise, an error is returned.
 	if start != "" {
-
 		if len(start) > releaseNameMaxLen {
 			return "", fmt.Errorf("release name %q exceeds max length of %d", start, releaseNameMaxLen)
 		}
 
-		h, err := s.env.Releases.History(start)
+		h, err := store.History(start)
 		if err != nil || len(h) < 1 {
 			return start, nil
 		}
@@ -689,7 +730,7 @@ func (s *ReleaseServer) uniqName(start string, reuse bool) (string, error) {
 		if len(name) > releaseNameMaxLen {
 			name = name[:releaseNameMaxLen]
 		}
-		if _, err := s.env.Releases.Get(name, 1); err == driver.ErrReleaseNotFound {
+		if _, err := store.Get(name, 1); err == driver.ErrReleaseNotFound {
 			return name, nil
 		}
 		log.Printf("info: Name %q is taken. Searching again.", name)
@@ -760,7 +801,12 @@ func (s *ReleaseServer) prepareRelease(c ctx.Context, req *services.InstallRelea
 		return nil, errMissingChart
 	}
 
-	name, err := s.uniqName(req.Name, req.ReuseName)
+	store, err := getReleaseStore(c)
+	if err != nil {
+		return nil, err
+	}
+
+	name, err := s.uniqName(store, req.Name, req.ReuseName)
 	if err != nil {
 		return nil, err
 	}
@@ -912,12 +958,12 @@ func (s *ReleaseServer) renderResources(ch *chart.Chart, values chartutil.Values
 	return hooks, b, notes, nil
 }
 
-func (s *ReleaseServer) recordRelease(r *release.Release, reuse bool) {
+func (s *ReleaseServer) recordRelease(store *storage.Storage, r *release.Release, reuse bool) {
 	if reuse {
-		if err := s.env.Releases.Update(r); err != nil {
+		if err := store.Update(r); err != nil {
 			log.Printf("warning: Failed to update release %q: %s", r.Name, err)
 		}
-	} else if err := s.env.Releases.Create(r); err != nil {
+	} else if err := store.Create(r); err != nil {
 		log.Printf("warning: Failed to record release %q: %s", r.Name, err)
 	}
 }
@@ -940,7 +986,12 @@ func (s *ReleaseServer) performRelease(c ctx.Context, r *release.Release, req *s
 		}
 	}
 
-	switch h, err := s.env.Releases.History(req.Name); {
+	store, err := getReleaseStore(c)
+	if err != nil {
+		return nil, err
+	}
+
+	switch h, err := store.History(req.Name); {
 	// if this is a replace operation, append to the release history
 	case req.ReuseName && err == nil && len(h) >= 1:
 		// get latest release revision
@@ -951,7 +1002,7 @@ func (s *ReleaseServer) performRelease(c ctx.Context, r *release.Release, req *s
 
 		// update old release status
 		old.Info.Status.Code = release.Status_SUPERSEDED
-		s.recordRelease(old, true)
+		s.recordRelease(store, old, true)
 
 		// update new release with next revision number
 		// so as to append to the old release's history
@@ -963,8 +1014,8 @@ func (s *ReleaseServer) performRelease(c ctx.Context, r *release.Release, req *s
 			old.Info.Status.Code = release.Status_SUPERSEDED
 			r.Info.Status.Code = release.Status_FAILED
 			r.Info.Description = msg
-			s.recordRelease(old, true)
-			s.recordRelease(r, false)
+			s.recordRelease(store, old, true)
+			s.recordRelease(store, r, false)
 			return res, err
 		}
 
@@ -981,7 +1032,7 @@ func (s *ReleaseServer) performRelease(c ctx.Context, r *release.Release, req *s
 			log.Printf("warning: %s", msg)
 			r.Info.Status.Code = release.Status_FAILED
 			r.Info.Description = msg
-			s.recordRelease(r, false)
+			s.recordRelease(store, r, false)
 			return res, fmt.Errorf("release %s failed: %s", r.Name, err)
 		}
 	}
@@ -993,7 +1044,7 @@ func (s *ReleaseServer) performRelease(c ctx.Context, r *release.Release, req *s
 			log.Printf("warning: %s", msg)
 			r.Info.Status.Code = release.Status_FAILED
 			r.Info.Description = msg
-			s.recordRelease(r, false)
+			s.recordRelease(store, r, false)
 			return res, err
 		}
 	}
@@ -1007,7 +1058,7 @@ func (s *ReleaseServer) performRelease(c ctx.Context, r *release.Release, req *s
 	//
 	// One possible strategy would be to do a timed retry to see if we can get
 	// this stored in the future.
-	s.recordRelease(r, false)
+	s.recordRelease(store, r, false)
 
 	return res, nil
 }
@@ -1055,9 +1106,9 @@ func (s *ReleaseServer) execHook(c ctx.Context, hs []*release.Hook, name, namesp
 	return nil
 }
 
-func (s *ReleaseServer) purgeReleases(rels ...*release.Release) error {
+func (s *ReleaseServer) purgeReleases(store *storage.Storage, rels ...*release.Release) error {
 	for _, rel := range rels {
-		if _, err := s.env.Releases.Delete(rel.Name, rel.Version); err != nil {
+		if _, err := store.Delete(rel.Name, rel.Version); err != nil {
 			return err
 		}
 	}
@@ -1075,7 +1126,12 @@ func (s *ReleaseServer) UninstallRelease(c ctx.Context, req *services.UninstallR
 		return nil, fmt.Errorf("release name %q exceeds max length of %d", req.Name, releaseNameMaxLen)
 	}
 
-	rels, err := s.env.Releases.History(req.Name)
+	store, err := getReleaseStore(c)
+	if err != nil {
+		return nil, err
+	}
+
+	rels, err := store.History(req.Name)
 	if err != nil {
 		log.Printf("uninstall: Release not loaded: %s", req.Name)
 		return nil, err
@@ -1096,7 +1152,7 @@ func (s *ReleaseServer) UninstallRelease(c ctx.Context, req *services.UninstallR
 	// already marked deleted?
 	if rel.Info.Status.Code == release.Status_DELETED {
 		if req.Purge {
-			if err := s.purgeReleases(rels...); err != nil {
+			if err := s.purgeReleases(store, rels...); err != nil {
 				log.Printf("uninstall: Failed to purge the release: %s", err)
 				return nil, err
 			}
@@ -1132,7 +1188,7 @@ func (s *ReleaseServer) UninstallRelease(c ctx.Context, req *services.UninstallR
 
 	// From here on out, the release is currently considered to be in Status_DELETING
 	// state.
-	if err := s.env.Releases.Update(rel); err != nil {
+	if err := store.Update(rel); err != nil {
 		log.Printf("uninstall: Failed to store updated release: %s", err)
 	}
 
@@ -1180,14 +1236,14 @@ func (s *ReleaseServer) UninstallRelease(c ctx.Context, req *services.UninstallR
 	rel.Info.Username = getUserName(c)
 
 	if req.Purge {
-		err := s.purgeReleases(rels...)
+		err := s.purgeReleases(store, rels...)
 		if err != nil {
 			log.Printf("uninstall: Failed to purge the release: %s", err)
 		}
 		return res, err
 	}
 
-	if err := s.env.Releases.Update(rel); err != nil {
+	if err := store.Update(rel); err != nil {
 		log.Printf("uninstall: Failed to store updated release: %s", err)
 	}
 
@@ -1205,13 +1261,17 @@ func validateManifest(c environment.KubeClient, ns string, manifest []byte) erro
 
 // RunReleaseTest runs pre-defined tests stored as hooks on a given release
 func (s *ReleaseServer) RunReleaseTest(req *services.TestReleaseRequest, stream services.ReleaseService_RunReleaseTestServer) error {
-
 	if !ValidName.MatchString(req.Name) {
 		return errMissingRelease
 	}
 
+	store, err := getReleaseStore(stream.Context())
+	if err != nil {
+		return err
+	}
+
 	// finds the non-deleted release with the given name
-	rel, err := s.env.Releases.Last(req.Name)
+	rel, err := store.Last(req.Name)
 	if err != nil {
 		return err
 	}
@@ -1248,7 +1308,7 @@ func (s *ReleaseServer) RunReleaseTest(req *services.TestReleaseRequest, stream 
 		testEnv.DeleteTestPods(tSuite.TestManifests)
 	}
 
-	return s.env.Releases.Update(rel)
+	return store.Update(rel)
 }
 
 func getKubeClient(c ctx.Context, key kube.AuthKey) (environment.KubeClient, error) {
@@ -1275,8 +1335,25 @@ func getUserName(c ctx.Context) string {
 	return userInfo.Username
 }
 
+func getReleaseStore(c ctx.Context) (*storage.Storage, error) {
+	v := c.Value(kube.ReleaseStore)
+	if v == nil {
+		return nil, errors.New("missing storage driver")
+	}
+	store, ok := v.(*storage.Storage)
+	if !ok {
+		return nil, errors.New("unknown storage driver")
+	}
+	return store, nil
+}
+
 func (s *ReleaseServer) checkAuthorization(c ctx.Context, targetRelease *release.Release) error {
-	h, err := s.env.Releases.History(targetRelease.Name)
+	store, err := getReleaseStore(c)
+	if err != nil {
+		return err
+	}
+
+	h, err := store.History(targetRelease.Name)
 	if err != driver.ErrReleaseNotFound && err != nil {
 		return err
 	}

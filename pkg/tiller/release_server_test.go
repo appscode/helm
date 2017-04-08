@@ -97,10 +97,10 @@ data:
   name: value
 `
 
-func rsFixture() *ReleaseServer {
+func rsFixture() (*ReleaseServer, *storage.Storage) {
 	return &ReleaseServer{
 		env: MockEnvironment(),
-	}
+	}, storage.Init(driver.NewMemory())
 }
 
 // chartStub creates a fully stubbed out chart.
@@ -217,15 +217,15 @@ func TestGetVersionSet(t *testing.T) {
 }
 
 func TestUniqName(t *testing.T) {
-	rs := rsFixture()
+	rs, store := rsFixture()
 
 	rel1 := releaseStub()
 	rel2 := releaseStub()
 	rel2.Name = "happy-panda"
 	rel2.Info.Status.Code = release.Status_DELETED
 
-	rs.env.Releases.Create(rel1)
-	rs.env.Releases.Create(rel2)
+	store.Create(rel1)
+	store.Create(rel2)
 
 	tests := []struct {
 		name   string
@@ -265,7 +265,8 @@ func TestInstallRelease(t *testing.T) {
 	c := helm.NewContext()
 	c = context.WithValue(c, kube.UserClient, kc)
 	c = context.WithValue(c, kube.SystemClient, kc)
-	rs := rsFixture()
+	rs, store := rsFixture()
+	c = context.WithValue(c, kube.ReleaseStore, store)
 
 	// TODO: Refactor this into a mock.
 	req := &services.InstallReleaseRequest{
@@ -289,9 +290,9 @@ func TestInstallRelease(t *testing.T) {
 		t.Errorf("Expected release namespace 'spaced', got '%s'.", res.Release.Namespace)
 	}
 
-	rel, err := rs.env.Releases.Get(res.Release.Name, res.Release.Version)
+	rel, err := store.Get(res.Release.Name, res.Release.Version)
 	if err != nil {
-		t.Errorf("Expected release for %s (%v).", res.Release.Name, rs.env.Releases)
+		t.Errorf("Expected release for %s (%v).", res.Release.Name, store)
 	}
 
 	t.Logf("rel: %v", rel)
@@ -332,7 +333,8 @@ func TestInstallReleaseWithNotes(t *testing.T) {
 	c := helm.NewContext()
 	c = context.WithValue(c, kube.UserClient, kc)
 	c = context.WithValue(c, kube.SystemClient, kc)
-	rs := rsFixture()
+	rs, store := rsFixture()
+	c = context.WithValue(c, kube.ReleaseStore, store)
 
 	// TODO: Refactor this into a mock.
 	req := &services.InstallReleaseRequest{
@@ -357,9 +359,9 @@ func TestInstallReleaseWithNotes(t *testing.T) {
 		t.Errorf("Expected release namespace 'spaced', got '%s'.", res.Release.Namespace)
 	}
 
-	rel, err := rs.env.Releases.Get(res.Release.Name, res.Release.Version)
+	rel, err := store.Get(res.Release.Name, res.Release.Version)
 	if err != nil {
-		t.Errorf("Expected release for %s (%v).", res.Release.Name, rs.env.Releases)
+		t.Errorf("Expected release for %s (%v).", res.Release.Name, store)
 	}
 
 	t.Logf("rel: %v", rel)
@@ -404,7 +406,8 @@ func TestInstallReleaseWithNotesRendered(t *testing.T) {
 	c := helm.NewContext()
 	c = context.WithValue(c, kube.UserClient, kc)
 	c = context.WithValue(c, kube.SystemClient, kc)
-	rs := rsFixture()
+	rs, store := rsFixture()
+	c = context.WithValue(c, kube.ReleaseStore, store)
 
 	// TODO: Refactor this into a mock.
 	req := &services.InstallReleaseRequest{
@@ -429,9 +432,9 @@ func TestInstallReleaseWithNotesRendered(t *testing.T) {
 		t.Errorf("Expected release namespace 'spaced', got '%s'.", res.Release.Namespace)
 	}
 
-	rel, err := rs.env.Releases.Get(res.Release.Name, res.Release.Version)
+	rel, err := store.Get(res.Release.Name, res.Release.Version)
 	if err != nil {
-		t.Errorf("Expected release for %s (%v).", res.Release.Name, rs.env.Releases)
+		t.Errorf("Expected release for %s (%v).", res.Release.Name, store)
 	}
 
 	t.Logf("rel: %v", rel)
@@ -477,7 +480,8 @@ func TestInstallReleaseWithChartAndDependencyNotes(t *testing.T) {
 	c := helm.NewContext()
 	c = context.WithValue(c, kube.UserClient, kc)
 	c = context.WithValue(c, kube.SystemClient, kc)
-	rs := rsFixture()
+	rs, store := rsFixture()
+	c = context.WithValue(c, kube.ReleaseStore, store)
 
 	// TODO: Refactor this into a mock.
 	req := &services.InstallReleaseRequest{
@@ -510,9 +514,9 @@ func TestInstallReleaseWithChartAndDependencyNotes(t *testing.T) {
 		t.Errorf("Expected release name.")
 	}
 
-	rel, err := rs.env.Releases.Get(res.Release.Name, res.Release.Version)
+	rel, err := store.Get(res.Release.Name, res.Release.Version)
 	if err != nil {
-		t.Errorf("Expected release for %s (%v).", res.Release.Name, rs.env.Releases)
+		t.Errorf("Expected release for %s (%v).", res.Release.Name, store)
 	}
 
 	t.Logf("rel: %v", rel)
@@ -565,7 +569,7 @@ func TestInstallReleaseDryRun(t *testing.T) {
 		t.Errorf("Should not contain template data for an empty file. %s", res.Release.Manifest)
 	}
 
-	if _, err := rs.env.Releases.Get(res.Release.Name, res.Release.Version); err == nil {
+	if _, err := store.Get(res.Release.Name, res.Release.Version); err == nil {
 		t.Errorf("Expected no stored release.")
 	}
 
@@ -587,8 +591,9 @@ func TestInstallReleaseNoHooks(t *testing.T) {
 	c := helm.NewContext()
 	c = context.WithValue(c, kube.UserClient, kc)
 	c = context.WithValue(c, kube.SystemClient, kc)
-	rs := rsFixture()
-	rs.env.Releases.Create(releaseStub())
+	rs, store := rsFixture()
+	c = context.WithValue(c, kube.ReleaseStore, store)
+	store.Create(releaseStub())
 
 	req := &services.InstallReleaseRequest{
 		Chart:        chartStub(),
@@ -608,8 +613,9 @@ func TestInstallReleaseFailedHooks(t *testing.T) {
 	c := helm.NewContext()
 	c = context.WithValue(c, kube.UserClient, newHookFailingKubeClient())
 	c = context.WithValue(c, kube.SystemClient, newHookFailingKubeClient())
-	rs := rsFixture()
-	rs.env.Releases.Create(releaseStub())
+	rs, store := rsFixture()
+	c = context.WithValue(c, kube.ReleaseStore, store)
+	store.Create(releaseStub())
 
 	req := &services.InstallReleaseRequest{
 		Chart: chartStub(),
@@ -629,10 +635,11 @@ func TestInstallReleaseReuseName(t *testing.T) {
 	c := helm.NewContext()
 	c = context.WithValue(c, kube.UserClient, kc)
 	c = context.WithValue(c, kube.SystemClient, kc)
-	rs := rsFixture()
+	rs, store := rsFixture()
+	c = context.WithValue(c, kube.ReleaseStore, store)
 	rel := releaseStub()
 	rel.Info.Status.Code = release.Status_DELETED
-	rs.env.Releases.Create(rel)
+	store.Create(rel)
 
 	req := &services.InstallReleaseRequest{
 		Chart:     chartStub(),
@@ -663,9 +670,10 @@ func TestUpdateRelease(t *testing.T) {
 	c := helm.NewContext()
 	c = context.WithValue(c, kube.UserClient, kc)
 	c = context.WithValue(c, kube.SystemClient, kc)
-	rs := rsFixture()
+	rs, store := rsFixture()
+	c = context.WithValue(c, kube.ReleaseStore, store)
 	rel := releaseStub()
-	rs.env.Releases.Create(rel)
+	store.Create(rel)
 
 	req := &services.UpdateReleaseRequest{
 		Name: rel.Name,
@@ -694,9 +702,9 @@ func TestUpdateRelease(t *testing.T) {
 		t.Errorf("Expected release namespace '%s', got '%s'.", rel.Namespace, res.Release.Namespace)
 	}
 
-	updated, err := rs.env.Releases.Get(res.Release.Name, res.Release.Version)
+	updated, err := store.Get(res.Release.Name, res.Release.Version)
 	if err != nil {
-		t.Errorf("Expected release for %s (%v).", res.Release.Name, rs.env.Releases)
+		t.Errorf("Expected release for %s (%v).", res.Release.Name, store)
 	}
 
 	if len(updated.Hooks) != 1 {
@@ -746,9 +754,10 @@ func TestUpdateRelease_ResetValues(t *testing.T) {
 	c := helm.NewContext()
 	c = context.WithValue(c, kube.UserClient, kc)
 	c = context.WithValue(c, kube.SystemClient, kc)
-	rs := rsFixture()
+	rs, store := rsFixture()
+	c = context.WithValue(c, kube.ReleaseStore, store)
 	rel := releaseStub()
-	rs.env.Releases.Create(rel)
+	store.Create(rel)
 
 	req := &services.UpdateReleaseRequest{
 		Name: rel.Name,
@@ -773,9 +782,10 @@ func TestUpdateRelease_ResetValues(t *testing.T) {
 
 func TestUpdateRelease_ReuseValues(t *testing.T) {
 	c := helm.NewContext()
-	rs := rsFixture()
+	rs, store := rsFixture()
+	c = context.WithValue(c, kube.ReleaseStore, store)
 	rel := releaseStub()
-	rs.env.Releases.Create(rel)
+	store.Create(rel)
 
 	req := &services.UpdateReleaseRequest{
 		Name: rel.Name,
@@ -810,9 +820,10 @@ func TestUpdateRelease_ReuseValues(t *testing.T) {
 func TestUpdateRelease_ResetReuseValues(t *testing.T) {
 	// This verifies that when both reset and reuse are set, reset wins.
 	c := helm.NewContext()
-	rs := rsFixture()
+	rs, store := rsFixture()
+	c = context.WithValue(c, kube.ReleaseStore, store)
 	rel := releaseStub()
-	rs.env.Releases.Create(rel)
+	store.Create(rel)
 
 	req := &services.UpdateReleaseRequest{
 		Name: rel.Name,
@@ -841,9 +852,11 @@ func TestUpdateReleaseFailure(t *testing.T) {
 	c = context.WithValue(c, kube.UserClient, newUpdateFailingKubeClient())
 	c = context.WithValue(c, kube.SystemClient, newUpdateFailingKubeClient())
 
-	rs := rsFixture()
+	rs, store := rsFixture()
+	c = context.WithValue(c, kube.ReleaseStore, store)
+
 	rel := releaseStub()
-	rs.env.Releases.Create(rel)
+	store.Create(rel)
 
 	req := &services.UpdateReleaseRequest{
 		Name:         rel.Name,
@@ -870,7 +883,7 @@ func TestUpdateReleaseFailure(t *testing.T) {
 		t.Errorf("Expected description %q, got %q", edesc, got)
 	}
 
-	oldRelease, err := rs.env.Releases.Get(rel.Name, rel.Version)
+	oldRelease, err := store.Get(rel.Name, rel.Version)
 	if err != nil {
 		t.Errorf("Expected to be able to get previous release")
 	}
@@ -884,12 +897,14 @@ func TestRollbackReleaseFailure(t *testing.T) {
 	c = context.WithValue(c, kube.UserClient, newUpdateFailingKubeClient())
 	c = context.WithValue(c, kube.SystemClient, newUpdateFailingKubeClient())
 
-	rs := rsFixture()
+	rs, store := rsFixture()
+	c = context.WithValue(c, kube.ReleaseStore, store)
+
 	rel := releaseStub()
-	rs.env.Releases.Create(rel)
+	store.Create(rel)
 	upgradedRel := upgradeReleaseVersion(rel)
-	rs.env.Releases.Update(rel)
-	rs.env.Releases.Create(upgradedRel)
+	store.Update(rel)
+	store.Create(upgradedRel)
 
 	req := &services.RollbackReleaseRequest{
 		Name:         rel.Name,
@@ -905,7 +920,7 @@ func TestRollbackReleaseFailure(t *testing.T) {
 		t.Errorf("Expected FAILED release. Got %v", targetStatus)
 	}
 
-	oldRelease, err := rs.env.Releases.Get(rel.Name, rel.Version)
+	oldRelease, err := store.Get(rel.Name, rel.Version)
 	if err != nil {
 		t.Errorf("Expected to be able to get previous release")
 	}
@@ -919,9 +934,10 @@ func TestUpdateReleaseNoHooks(t *testing.T) {
 	c := helm.NewContext()
 	c = context.WithValue(c, kube.UserClient, kc)
 	c = context.WithValue(c, kube.SystemClient, kc)
-	rs := rsFixture()
+	rs, store := rsFixture()
+	c = context.WithValue(c, kube.ReleaseStore, store)
 	rel := releaseStub()
-	rs.env.Releases.Create(rel)
+	store.Create(rel)
 
 	req := &services.UpdateReleaseRequest{
 		Name:         rel.Name,
@@ -951,9 +967,10 @@ func TestUpdateReleaseNoChanges(t *testing.T) {
 	c := helm.NewContext()
 	c = context.WithValue(c, kube.UserClient, kc)
 	c = context.WithValue(c, kube.SystemClient, kc)
-	rs := rsFixture()
+	rs, store := rsFixture()
+	c = context.WithValue(c, kube.ReleaseStore, store)
 	rel := releaseStub()
-	rs.env.Releases.Create(rel)
+	store.Create(rel)
 
 	req := &services.UpdateReleaseRequest{
 		Name:         rel.Name,
@@ -972,7 +989,8 @@ func TestRollbackReleaseNoHooks(t *testing.T) {
 	c := helm.NewContext()
 	c = context.WithValue(c, kube.UserClient, kc)
 	c = context.WithValue(c, kube.SystemClient, kc)
-	rs := rsFixture()
+	rs, store := rsFixture()
+	c = context.WithValue(c, kube.ReleaseStore, store)
 	rel := releaseStub()
 	rel.Hooks = []*release.Hook{
 		{
@@ -986,10 +1004,10 @@ func TestRollbackReleaseNoHooks(t *testing.T) {
 			},
 		},
 	}
-	rs.env.Releases.Create(rel)
+	store.Create(rel)
 	upgradedRel := upgradeReleaseVersion(rel)
-	rs.env.Releases.Update(rel)
-	rs.env.Releases.Create(upgradedRel)
+	store.Update(rel)
+	store.Create(upgradedRel)
 
 	req := &services.RollbackReleaseRequest{
 		Name:         rel.Name,
@@ -1011,12 +1029,13 @@ func TestRollbackWithReleaseVersion(t *testing.T) {
 	c := helm.NewContext()
 	c = context.WithValue(c, kube.UserClient, kc)
 	c = context.WithValue(c, kube.SystemClient, kc)
-	rs := rsFixture()
+	rs, store := rsFixture()
+	c = context.WithValue(c, kube.ReleaseStore, store)
 	rel := releaseStub()
-	rs.env.Releases.Create(rel)
+	store.Create(rel)
 	upgradedRel := upgradeReleaseVersion(rel)
-	rs.env.Releases.Update(rel)
-	rs.env.Releases.Create(upgradedRel)
+	store.Update(rel)
+	store.Create(upgradedRel)
 
 	req := &services.RollbackReleaseRequest{
 		Name:         rel.Name,
@@ -1035,9 +1054,10 @@ func TestRollbackRelease(t *testing.T) {
 	c := helm.NewContext()
 	c = context.WithValue(c, kube.UserClient, kc)
 	c = context.WithValue(c, kube.SystemClient, kc)
-	rs := rsFixture()
+	rs, store := rsFixture()
+	c = context.WithValue(c, kube.ReleaseStore, store)
 	rel := releaseStub()
-	rs.env.Releases.Create(rel)
+	store.Create(rel)
 	upgradedRel := upgradeReleaseVersion(rel)
 	upgradedRel.Hooks = []*release.Hook{
 		{
@@ -1053,8 +1073,8 @@ func TestRollbackRelease(t *testing.T) {
 	}
 
 	upgradedRel.Manifest = "hello world"
-	rs.env.Releases.Update(rel)
-	rs.env.Releases.Create(upgradedRel)
+	store.Update(rel)
+	store.Create(upgradedRel)
 
 	req := &services.RollbackReleaseRequest{
 		Name: rel.Name,
@@ -1080,7 +1100,7 @@ func TestRollbackRelease(t *testing.T) {
 		t.Errorf("Expected release version to be %v, got %v", 3, res.Release.Version)
 	}
 
-	updated, err := rs.env.Releases.Get(res.Release.Name, res.Release.Version)
+	updated, err := store.Get(res.Release.Name, res.Release.Version)
 	if err != nil {
 		t.Errorf("Expected release for %s (%v).", res.Release.Name, rs.env.Releases)
 	}
@@ -1094,15 +1114,15 @@ func TestRollbackRelease(t *testing.T) {
 	}
 
 	anotherUpgradedRelease := upgradeReleaseVersion(upgradedRel)
-	rs.env.Releases.Update(upgradedRel)
-	rs.env.Releases.Create(anotherUpgradedRelease)
+	store.Update(upgradedRel)
+	store.Create(anotherUpgradedRelease)
 
 	res, err = rs.RollbackRelease(c, req)
 	if err != nil {
 		t.Fatalf("Failed rollback: %s", err)
 	}
 
-	updated, err = rs.env.Releases.Get(res.Release.Name, res.Release.Version)
+	updated, err = store.Get(res.Release.Name, res.Release.Version)
 	if err != nil {
 		t.Errorf("Expected release for %s (%v).", res.Release.Name, rs.env.Releases)
 	}
@@ -1150,8 +1170,9 @@ func TestUninstallRelease(t *testing.T) {
 	c := helm.NewContext()
 	c = context.WithValue(c, kube.UserClient, kc)
 	c = context.WithValue(c, kube.SystemClient, kc)
-	rs := rsFixture()
-	rs.env.Releases.Create(releaseStub())
+	rs, store := rsFixture()
+	c = context.WithValue(c, kube.ReleaseStore, store)
+	store.Create(releaseStub())
 
 	req := &services.UninstallReleaseRequest{
 		Name: "angry-panda",
@@ -1188,12 +1209,13 @@ func TestUninstallPurgeRelease(t *testing.T) {
 	c := helm.NewContext()
 	c = context.WithValue(c, kube.UserClient, kc)
 	c = context.WithValue(c, kube.SystemClient, kc)
-	rs := rsFixture()
+	rs, store := rsFixture()
+	c = context.WithValue(c, kube.ReleaseStore, store)
 	rel := releaseStub()
-	rs.env.Releases.Create(rel)
+	store.Create(rel)
 	upgradedRel := upgradeReleaseVersion(rel)
-	rs.env.Releases.Update(rel)
-	rs.env.Releases.Create(upgradedRel)
+	store.Update(rel)
+	store.Create(upgradedRel)
 
 	req := &services.UninstallReleaseRequest{
 		Name:  "angry-panda",
@@ -1230,8 +1252,9 @@ func TestUninstallPurgeDeleteRelease(t *testing.T) {
 	c := helm.NewContext()
 	c = context.WithValue(c, kube.UserClient, kc)
 	c = context.WithValue(c, kube.SystemClient, kc)
-	rs := rsFixture()
-	rs.env.Releases.Create(releaseStub())
+	rs, store := rsFixture()
+	c = context.WithValue(c, kube.ReleaseStore, store)
+	store.Create(releaseStub())
 
 	req := &services.UninstallReleaseRequest{
 		Name: "angry-panda",
@@ -1258,9 +1281,10 @@ func TestUninstallReleaseWithKeepPolicy(t *testing.T) {
 	c := helm.NewContext()
 	c = context.WithValue(c, kube.UserClient, kc)
 	c = context.WithValue(c, kube.SystemClient, kc)
-	rs := rsFixture()
+	rs, store := rsFixture()
+	c = context.WithValue(c, kube.ReleaseStore, store)
 	name := "angry-bunny"
-	rs.env.Releases.Create(releaseWithKeepStub(name))
+	store.Create(releaseWithKeepStub(name))
 
 	req := &services.UninstallReleaseRequest{
 		Name: name,
@@ -1318,8 +1342,9 @@ func TestUninstallReleaseNoHooks(t *testing.T) {
 	c := helm.NewContext()
 	c = context.WithValue(c, kube.UserClient, kc)
 	c = context.WithValue(c, kube.SystemClient, kc)
-	rs := rsFixture()
-	rs.env.Releases.Create(releaseStub())
+	rs, store := rsFixture()
+	c = context.WithValue(c, kube.ReleaseStore, store)
+	store.Create(releaseStub())
 
 	req := &services.UninstallReleaseRequest{
 		Name:         "angry-panda",
@@ -1339,9 +1364,10 @@ func TestUninstallReleaseNoHooks(t *testing.T) {
 
 func TestGetReleaseContent(t *testing.T) {
 	c := helm.NewContext()
-	rs := rsFixture()
+	rs, store := rsFixture()
+	c = context.WithValue(c, kube.ReleaseStore, store)
 	rel := releaseStub()
-	if err := rs.env.Releases.Create(rel); err != nil {
+	if err := store.Create(rel); err != nil {
 		t.Fatalf("Could not store mock release: %s", err)
 	}
 
@@ -1360,9 +1386,10 @@ func TestGetReleaseStatus(t *testing.T) {
 	c := helm.NewContext()
 	c = context.WithValue(c, kube.UserClient, kc)
 	c = context.WithValue(c, kube.SystemClient, kc)
-	rs := rsFixture()
+	rs, store := rsFixture()
+	c = context.WithValue(c, kube.ReleaseStore, store)
 	rel := releaseStub()
-	if err := rs.env.Releases.Create(rel); err != nil {
+	if err := store.Create(rel); err != nil {
 		t.Fatalf("Could not store mock release: %s", err)
 	}
 
@@ -1384,10 +1411,11 @@ func TestGetReleaseStatusDeleted(t *testing.T) {
 	c := helm.NewContext()
 	c = context.WithValue(c, kube.UserClient, kc)
 	c = context.WithValue(c, kube.SystemClient, kc)
-	rs := rsFixture()
+	rs, store := rsFixture()
+	c = context.WithValue(c, kube.ReleaseStore, store)
 	rel := releaseStub()
 	rel.Info.Status.Code = release.Status_DELETED
-	if err := rs.env.Releases.Create(rel); err != nil {
+	if err := store.Create(rel); err != nil {
 		t.Fatalf("Could not store mock release: %s", err)
 	}
 
@@ -1402,12 +1430,12 @@ func TestGetReleaseStatusDeleted(t *testing.T) {
 }
 
 func TestListReleases(t *testing.T) {
-	rs := rsFixture()
+	rs, store := rsFixture()
 	num := 7
 	for i := 0; i < num; i++ {
 		rel := releaseStub()
 		rel.Name = fmt.Sprintf("rel-%d", i)
-		if err := rs.env.Releases.Create(rel); err != nil {
+		if err := store.Create(rel); err != nil {
 			t.Fatalf("Could not store mock release: %s", err)
 		}
 	}
@@ -1423,7 +1451,7 @@ func TestListReleases(t *testing.T) {
 }
 
 func TestListReleasesByStatus(t *testing.T) {
-	rs := rsFixture()
+	rs, store := rsFixture()
 	stubs := []*release.Release{
 		namedReleaseStub("kamal", release.Status_DEPLOYED),
 		namedReleaseStub("astrolabe", release.Status_DELETED),
@@ -1431,7 +1459,7 @@ func TestListReleasesByStatus(t *testing.T) {
 		namedReleaseStub("sextant", release.Status_UNKNOWN),
 	}
 	for _, stub := range stubs {
-		if err := rs.env.Releases.Create(stub); err != nil {
+		if err := store.Create(stub); err != nil {
 			t.Fatalf("Could not create stub: %s", err)
 		}
 	}
@@ -1488,7 +1516,7 @@ func TestListReleasesByStatus(t *testing.T) {
 }
 
 func TestListReleasesSort(t *testing.T) {
-	rs := rsFixture()
+	rs, store := rsFixture()
 
 	// Put them in by reverse order so that the mock doesn't "accidentally"
 	// sort.
@@ -1496,7 +1524,7 @@ func TestListReleasesSort(t *testing.T) {
 	for i := num; i > 0; i-- {
 		rel := releaseStub()
 		rel.Name = fmt.Sprintf("rel-%d", i)
-		if err := rs.env.Releases.Create(rel); err != nil {
+		if err := store.Create(rel); err != nil {
 			t.Fatalf("Could not store mock release: %s", err)
 		}
 	}
@@ -1525,7 +1553,7 @@ func TestListReleasesSort(t *testing.T) {
 }
 
 func TestListReleasesFilter(t *testing.T) {
-	rs := rsFixture()
+	rs, store := rsFixture()
 	names := []string{
 		"axon",
 		"dendrite",
@@ -1539,7 +1567,7 @@ func TestListReleasesFilter(t *testing.T) {
 	for i := 0; i < num; i++ {
 		rel := releaseStub()
 		rel.Name = names[i]
-		if err := rs.env.Releases.Create(rel); err != nil {
+		if err := store.Create(rel); err != nil {
 			t.Fatalf("Could not store mock release: %s", err)
 		}
 	}
@@ -1568,7 +1596,7 @@ func TestListReleasesFilter(t *testing.T) {
 }
 
 func TestReleasesNamespace(t *testing.T) {
-	rs := rsFixture()
+	rs, store := rsFixture()
 
 	names := []string{
 		"axon",
@@ -1588,7 +1616,7 @@ func TestReleasesNamespace(t *testing.T) {
 		rel := releaseStub()
 		rel.Name = names[i]
 		rel.Namespace = namespaces[i]
-		if err := rs.env.Releases.Create(rel); err != nil {
+		if err := store.Create(rel); err != nil {
 			t.Fatalf("Could not store mock release: %s", err)
 		}
 	}
@@ -1610,9 +1638,9 @@ func TestReleasesNamespace(t *testing.T) {
 }
 
 func TestRunReleaseTest(t *testing.T) {
-	rs := rsFixture()
+	rs, store := rsFixture()
 	rel := namedReleaseStub("nemo", release.Status_DEPLOYED)
-	rs.env.Releases.Create(rel)
+	store.Create(rel)
 
 	req := &services.TestReleaseRequest{Name: "nemo", Timeout: 2}
 	err := rs.RunReleaseTest(req, mockRunReleaseTestServer{})
@@ -1623,7 +1651,6 @@ func TestRunReleaseTest(t *testing.T) {
 
 func MockEnvironment() *environment.Environment {
 	e := environment.New()
-	e.Releases = storage.Init(driver.NewMemory())
 	return e
 }
 
