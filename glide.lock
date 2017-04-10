@@ -1,5 +1,5 @@
-hash: 10020c7ea9f910dce5145191a2ceef4eb24a7ac360533235a97c4774c4348f7d
-updated: 2017-04-07T16:08:05.335141942-07:00
+hash: c6ca249c55bd16de31981e035087e418312d2238ddd7e38d64bc1d2077a0a833
+updated: 2017-04-09T17:42:10.956981859-07:00
 imports:
 - name: bitbucket.org/ww/goautoneg
   version: 75cd24fc2f2c2a2088577d12123ddee5f54e0675
@@ -362,7 +362,7 @@ imports:
   - unicode/norm
   - width
 - name: google.golang.org/api
-  version: 16ab375f94503bfa0d19db78e96bffbe1a34354f
+  version: 48e49d1645e228d1c50c3d54fb476b2224477303
   subpackages:
   - gensupport
   - googleapi
@@ -385,7 +385,7 @@ imports:
   subpackages:
   - googleapis/api/annotations
 - name: google.golang.org/grpc
-  version: cdee119ee21e61eef7093a41ba148fa83585e143
+  version: 8050b9cbc271307e5a716a9d782803d09b0d6f2d
   subpackages:
   - codes
   - credentials
