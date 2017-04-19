@@ -24,7 +24,7 @@ import (
 	yaml "gopkg.in/yaml.v2"
 
 	"github.com/gobwas/glob"
-	"github.com/golang/protobuf/ptypes/any"
+	any "k8s.io/helm/pkg/proto/hapi/chart"
 	"github.com/naoina/toml"
 )
 
