@@ -22,7 +22,7 @@ import (
 	"strings"
 
 	"github.com/ghodss/yaml"
-	"github.com/golang/protobuf/ptypes/any"
+	any "k8s.io/helm/pkg/proto/hapi/chart"
 	"github.com/spf13/cobra"
 
 	"k8s.io/helm/pkg/chartutil"
