@@ -35,19 +35,19 @@ all: chart release services rudder version
 
 .PHONY: chart
 chart:
-	PATH=../bin:$(PATH) protoc --$(target)_out=plugins=$(plugins),$(google_deps),$(chart_ias):$(dst) $(chart_pbs)
+	PATH=../bin:$(PATH) protoc --$(target)_out=plugins=$(plugins),$(google_deps),$(chart_ias):$(dst) --go-json_out=$(dst) $(chart_pbs)
 
 .PHONY: release
 release:
-	PATH=../bin:$(PATH) protoc --$(target)_out=plugins=$(plugins),$(google_deps),$(chart_ias),$(version_ias):$(dst) $(release_pbs)
+	PATH=../bin:$(PATH) protoc --$(target)_out=plugins=$(plugins),$(google_deps),$(chart_ias),$(version_ias):$(dst) --go-json_out=$(dst) $(release_pbs)
 
 .PHONY: services
 services:
-	PATH=../bin:$(PATH) protoc --$(target)_out=plugins=$(plugins),$(google_deps),$(chart_ias),$(version_ias),$(release_ias):$(dst) $(services_pbs)
+	PATH=../bin:$(PATH) protoc --$(target)_out=plugins=$(plugins),$(google_deps),$(chart_ias),$(version_ias),$(release_ias):$(dst) --go-json_out=$(dst) $(services_pbs)
 
 .PHONY: rudder
 rudder:
-	PATH=../bin:$(PATH) protoc --$(target)_out=plugins=$(plugins),$(google_deps),$(chart_ias),$(version_ias),$(release_ias):$(dst) $(rudder_pbs)
+	PATH=../bin:$(PATH) protoc --$(target)_out=plugins=$(plugins),$(google_deps),$(chart_ias),$(version_ias),$(release_ias):$(dst) --go-json_out=$(dst) $(rudder_pbs)
 
 .PHONY: version
 version:
