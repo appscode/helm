@@ -17,6 +17,7 @@ limitations under the License.
 package kube // import "k8s.io/helm/pkg/kube"
 
 import (
+	"context"
 	"testing"
 
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -31,7 +32,7 @@ func TestEnsureNamespace(t *testing.T) {
 	if err := ensureNamespace(client, "foo"); err != nil {
 		t.Fatalf("unexpected error: %s", err)
 	}
-	if _, err := client.CoreV1().Namespaces().Get("foo", metav1.GetOptions{}); err != nil {
+	if _, err := client.CoreV1().Namespaces().Get(context.TODO(), "foo", metav1.GetOptions{}); err != nil {
 		t.Fatalf("unexpected error: %s", err)
 	}
 }

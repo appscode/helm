@@ -17,6 +17,7 @@ limitations under the License.
 package portforwarder
 
 import (
+	"context"
 	"fmt"
 
 	"k8s.io/api/core/v1"
@@ -71,7 +72,7 @@ func GetTillerPodImage(client corev1.PodsGetter, namespace string) (string, erro
 
 func getFirstRunningPod(client corev1.PodsGetter, namespace string, selector labels.Selector) (*v1.Pod, error) {
 	options := metav1.ListOptions{LabelSelector: selector.String()}
-	pods, err := client.Pods(namespace).List(options)
+	pods, err := client.Pods(namespace).List(context.TODO(), options)
 	if err != nil {
 		return nil, err
 	}

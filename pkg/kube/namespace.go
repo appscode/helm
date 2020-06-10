@@ -17,6 +17,7 @@ limitations under the License.
 package kube // import "k8s.io/helm/pkg/kube"
 
 import (
+	"context"
 	"k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -32,12 +33,12 @@ func createNamespace(client kubernetes.Interface, namespace string) error {
 			},
 		},
 	}
-	_, err := client.CoreV1().Namespaces().Create(ns)
+	_, err := client.CoreV1().Namespaces().Create(context.TODO(), ns, metav1.CreateOptions{})
 	return err
 }
 
 func getNamespace(client kubernetes.Interface, namespace string) (*v1.Namespace, error) {
-	return client.CoreV1().Namespaces().Get(namespace, metav1.GetOptions{})
+	return client.CoreV1().Namespaces().Get(context.TODO(), namespace, metav1.GetOptions{})
 }
 
 func ensureNamespace(client kubernetes.Interface, namespace string) error {

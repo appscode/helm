@@ -17,6 +17,7 @@ limitations under the License.
 package kube // import "k8s.io/helm/pkg/kube"
 
 import (
+	"context"
 	"time"
 
 	appsv1 "k8s.io/api/apps/v1"
@@ -61,13 +62,13 @@ func (c *Client) waitForResources(timeout time.Duration, created Result) error {
 				}
 				pods = append(pods, list...)
 			case *v1.Pod:
-				pod, err := kcs.CoreV1().Pods(value.Namespace).Get(value.Name, metav1.GetOptions{})
+				pod, err := kcs.CoreV1().Pods(value.Namespace).Get(context.TODO(), value.Name, metav1.GetOptions{})
 				if err != nil {
 					return false, err
 				}
 				pods = append(pods, *pod)
 			case *appsv1.Deployment:
-				currentDeployment, err := kcs.AppsV1().Deployments(value.Namespace).Get(value.Name, metav1.GetOptions{})
+				currentDeployment, err := kcs.AppsV1().Deployments(value.Namespace).Get(context.TODO(), value.Name, metav1.GetOptions{})
 				if err != nil {
 					return false, err
 				}
@@ -86,7 +87,7 @@ func (c *Client) waitForResources(timeout time.Duration, created Result) error {
 				}
 				deployments = append(deployments, newDeployment)
 			case *appsv1beta1.Deployment:
-				currentDeployment, err := kcs.AppsV1().Deployments(value.Namespace).Get(value.Name, metav1.GetOptions{})
+				currentDeployment, err := kcs.AppsV1().Deployments(value.Namespace).Get(context.TODO(), value.Name, metav1.GetOptions{})
 				if err != nil {
 					return false, err
 				}
@@ -105,7 +106,7 @@ func (c *Client) waitForResources(timeout time.Duration, created Result) error {
 				}
 				deployments = append(deployments, newDeployment)
 			case *appsv1beta2.Deployment:
-				currentDeployment, err := kcs.AppsV1().Deployments(value.Namespace).Get(value.Name, metav1.GetOptions{})
+				currentDeployment, err := kcs.AppsV1().Deployments(value.Namespace).Get(context.TODO(), value.Name, metav1.GetOptions{})
 				if err != nil {
 					return false, err
 				}
@@ -124,7 +125,7 @@ func (c *Client) waitForResources(timeout time.Duration, created Result) error {
 				}
 				deployments = append(deployments, newDeployment)
 			case *extensions.Deployment:
-				currentDeployment, err := kcs.AppsV1().Deployments(value.Namespace).Get(value.Name, metav1.GetOptions{})
+				currentDeployment, err := kcs.AppsV1().Deployments(value.Namespace).Get(context.TODO(), value.Name, metav1.GetOptions{})
 				if err != nil {
 					return false, err
 				}
@@ -197,13 +198,13 @@ func (c *Client) waitForResources(timeout time.Duration, created Result) error {
 				}
 				pods = append(pods, list...)
 			case *v1.PersistentVolumeClaim:
-				claim, err := kcs.CoreV1().PersistentVolumeClaims(value.Namespace).Get(value.Name, metav1.GetOptions{})
+				claim, err := kcs.CoreV1().PersistentVolumeClaims(value.Namespace).Get(context.TODO(), value.Name, metav1.GetOptions{})
 				if err != nil {
 					return false, err
 				}
 				pvc = append(pvc, *claim)
 			case *v1.Service:
-				svc, err := kcs.CoreV1().Services(value.Namespace).Get(value.Name, metav1.GetOptions{})
+				svc, err := kcs.CoreV1().Services(value.Namespace).Get(context.TODO(), value.Name, metav1.GetOptions{})
 				if err != nil {
 					return false, err
 				}
@@ -267,7 +268,7 @@ func (c *Client) deploymentsReady(deployments []deployment) bool {
 }
 
 func getPods(client kubernetes.Interface, namespace string, selector map[string]string) ([]v1.Pod, error) {
-	list, err := client.CoreV1().Pods(namespace).List(metav1.ListOptions{
+	list, err := client.CoreV1().Pods(namespace).List(context.TODO(), metav1.ListOptions{
 		FieldSelector: fields.Everything().String(),
 		LabelSelector: labels.Set(selector).AsSelector().String(),
 	})
