@@ -17,6 +17,7 @@ limitations under the License.
 package installer // import "k8s.io/helm/cmd/helm/installer"
 
 import (
+	"context"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/client-go/kubernetes"
@@ -42,14 +43,14 @@ func Uninstall(client kubernetes.Interface, opts *Options) error {
 
 // deleteService deletes the Tiller Service resource
 func deleteService(client corev1.ServicesGetter, namespace string) error {
-	err := client.Services(namespace).Delete(serviceName, &metav1.DeleteOptions{})
+	err := client.Services(namespace).Delete(context.TODO(), serviceName, metav1.DeleteOptions{})
 	return ingoreNotFound(err)
 }
 
 // deleteDeployment deletes the Tiller Deployment resource
 func deleteDeployment(client kubernetes.Interface, namespace string) error {
 	policy := metav1.DeletePropagationBackground
-	err := client.AppsV1().Deployments(namespace).Delete(deploymentName, &metav1.DeleteOptions{
+	err := client.AppsV1().Deployments(namespace).Delete(context.TODO(), deploymentName, metav1.DeleteOptions{
 		PropagationPolicy: &policy,
 	})
 	return ingoreNotFound(err)
@@ -57,7 +58,7 @@ func deleteDeployment(client kubernetes.Interface, namespace string) error {
 
 // deleteSecret deletes the Tiller Secret resource
 func deleteSecret(client corev1.SecretsGetter, namespace string) error {
-	err := client.Secrets(namespace).Delete(secretName, &metav1.DeleteOptions{})
+	err := client.Secrets(namespace).Delete(context.TODO(), secretName, metav1.DeleteOptions{})
 	return ingoreNotFound(err)
 }
 

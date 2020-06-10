@@ -17,6 +17,7 @@ limitations under the License.
 package driver // import "k8s.io/helm/pkg/storage/driver"
 
 import (
+	"context"
 	"fmt"
 	"strconv"
 	"strings"
@@ -63,7 +64,7 @@ func (cfgmaps *ConfigMaps) Name() string {
 // or error if not found.
 func (cfgmaps *ConfigMaps) Get(key string) (*rspb.Release, error) {
 	// fetch the configmap holding the release named by key
-	obj, err := cfgmaps.impl.Get(key, metav1.GetOptions{})
+	obj, err := cfgmaps.impl.Get(context.TODO(), key, metav1.GetOptions{})
 	if err != nil {
 		if apierrors.IsNotFound(err) {
 			return nil, storageerrors.ErrReleaseNotFound(key)
@@ -89,7 +90,7 @@ func (cfgmaps *ConfigMaps) List(filter func(*rspb.Release) bool) ([]*rspb.Releas
 	lsel := kblabels.Set{"OWNER": "TILLER"}.AsSelector()
 	opts := metav1.ListOptions{LabelSelector: lsel.String()}
 
-	list, err := cfgmaps.impl.List(opts)
+	list, err := cfgmaps.impl.List(context.TODO(), opts)
 	if err != nil {
 		cfgmaps.Log("list: failed to list: %s", err)
 		return nil, err
@@ -125,7 +126,7 @@ func (cfgmaps *ConfigMaps) Query(labels map[string]string) ([]*rspb.Release, err
 
 	opts := metav1.ListOptions{LabelSelector: ls.AsSelector().String()}
 
-	list, err := cfgmaps.impl.List(opts)
+	list, err := cfgmaps.impl.List(context.TODO(), opts)
 	if err != nil {
 		cfgmaps.Log("query: failed to query with labels: %s", err)
 		return nil, err
@@ -163,7 +164,7 @@ func (cfgmaps *ConfigMaps) Create(key string, rls *rspb.Release) error {
 		return err
 	}
 	// push the configmap object out into the kubiverse
-	if _, err := cfgmaps.impl.Create(obj); err != nil {
+	if _, err := cfgmaps.impl.Create(context.TODO(), obj, metav1.CreateOptions{}); err != nil {
 		if apierrors.IsAlreadyExists(err) {
 			return storageerrors.ErrReleaseExists(key)
 		}
@@ -190,7 +191,7 @@ func (cfgmaps *ConfigMaps) Update(key string, rls *rspb.Release) error {
 		return err
 	}
 	// push the configmap object out into the kubiverse
-	_, err = cfgmaps.impl.Update(obj)
+	_, err = cfgmaps.impl.Update(context.TODO(), obj, metav1.UpdateOptions{})
 	if err != nil {
 		cfgmaps.Log("update: failed to update: %s", err)
 		return err
@@ -210,7 +211,7 @@ func (cfgmaps *ConfigMaps) Delete(key string) (rls *rspb.Release, err error) {
 		return nil, err
 	}
 	// delete the release
-	if err = cfgmaps.impl.Delete(key, &metav1.DeleteOptions{}); err != nil {
+	if err = cfgmaps.impl.Delete(context.TODO(), key, metav1.DeleteOptions{}); err != nil {
 		return rls, err
 	}
 	return rls, nil

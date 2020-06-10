@@ -17,6 +17,7 @@ limitations under the License.
 package driver // import "k8s.io/helm/pkg/storage/driver"
 
 import (
+	"context"
 	"fmt"
 	"strconv"
 	"strings"
@@ -63,7 +64,7 @@ func (secrets *Secrets) Name() string {
 // or error if not found.
 func (secrets *Secrets) Get(key string) (*rspb.Release, error) {
 	// fetch the secret holding the release named by key
-	obj, err := secrets.impl.Get(key, metav1.GetOptions{})
+	obj, err := secrets.impl.Get(context.TODO(), key, metav1.GetOptions{})
 	if err != nil {
 		if apierrors.IsNotFound(err) {
 			return nil, storageerrors.ErrReleaseNotFound(key)
@@ -89,7 +90,7 @@ func (secrets *Secrets) List(filter func(*rspb.Release) bool) ([]*rspb.Release, 
 	lsel := kblabels.Set{"OWNER": "TILLER"}.AsSelector()
 	opts := metav1.ListOptions{LabelSelector: lsel.String()}
 
-	list, err := secrets.impl.List(opts)
+	list, err := secrets.impl.List(context.TODO(), opts)
 	if err != nil {
 		secrets.Log("list: failed to list: %s", err)
 		return nil, err
@@ -125,7 +126,7 @@ func (secrets *Secrets) Query(labels map[string]string) ([]*rspb.Release, error)
 
 	opts := metav1.ListOptions{LabelSelector: ls.AsSelector().String()}
 
-	list, err := secrets.impl.List(opts)
+	list, err := secrets.impl.List(context.TODO(), opts)
 	if err != nil {
 		secrets.Log("query: failed to query with labels: %s", err)
 		return nil, err
@@ -163,7 +164,7 @@ func (secrets *Secrets) Create(key string, rls *rspb.Release) error {
 		return err
 	}
 	// push the secret object out into the kubiverse
-	if _, err := secrets.impl.Create(obj); err != nil {
+	if _, err := secrets.impl.Create(context.TODO(), obj, metav1.CreateOptions{}); err != nil {
 		if apierrors.IsAlreadyExists(err) {
 			return storageerrors.ErrReleaseExists(rls.Name)
 		}
@@ -190,7 +191,7 @@ func (secrets *Secrets) Update(key string, rls *rspb.Release) error {
 		return err
 	}
 	// push the secret object out into the kubiverse
-	_, err = secrets.impl.Update(obj)
+	_, err = secrets.impl.Update(context.TODO(), obj, metav1.UpdateOptions{})
 	if err != nil {
 		secrets.Log("update: failed to update: %s", err)
 		return err
@@ -210,7 +211,7 @@ func (secrets *Secrets) Delete(key string) (rls *rspb.Release, err error) {
 		return nil, err
 	}
 	// delete the release
-	if err = secrets.impl.Delete(key, &metav1.DeleteOptions{}); err != nil {
+	if err = secrets.impl.Delete(context.TODO(), key, metav1.DeleteOptions{}); err != nil {
 		return rls, err
 	}
 	return rls, nil
